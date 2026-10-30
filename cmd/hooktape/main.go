@@ -1,0 +1,4 @@
+package hooktape
+
+func main() {
+}
