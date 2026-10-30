@@ -186,7 +186,7 @@ func TestBannerPasteHintWithoutTunnel(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	printBanner(cmd, render.Colors(false), fakeAddr("0.0.0.0:8080"))
+	printBanner(cmd, render.Colors(false), fakeAddr("0.0.0.0:8080"), nil)
 
 	if want := "  paste →   http://127.0.0.1:8080/h/stripe\n"; !strings.Contains(out.String(), want) {
 		t.Errorf("missing %q in:\n%s", want, out.String())

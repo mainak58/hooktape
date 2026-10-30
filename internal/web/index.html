@@ -1,0 +1,1409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hooktape</title>
+<meta name="color-scheme" content="light dark">
+<style>
+:root{
+  --bg:#f6f6f3; --surface:#ffffff; --surface-2:#f0f0ec; --surface-3:#e8e8e3;
+  --border:#e2e2dc; --border-strong:#cfcfc7;
+  --text:#18181b; --muted:#62626b; --faint:#9c9ca5;
+  --accent:#e4572e; --accent-ink:#ffffff; --accent-soft:#fde8e0;
+  --ok:#15803d; --ok-soft:#dcfce7; --err:#c42a2a; --err-soft:#fde2e2;
+  --warn:#b45309; --warn-soft:#fef0c7; --info:#1d5fd1; --info-soft:#dfeafe;
+  --violet:#6d3fd1; --violet-soft:#ece4fd;
+  --code-bg:#fafaf7; --row-hover:#f7f7f3; --row-sel:#fff3ee;
+  --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.06);
+  --j-key:#1d5fd1; --j-str:#15803d; --j-num:#b45309; --j-lit:#6d3fd1;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d0e10; --surface:#15171a; --surface-2:#1b1e22; --surface-3:#23272c;
+    --border:#262a2f; --border-strong:#353a41;
+    --text:#e8e8ec; --muted:#9b9ea6; --faint:#686c74;
+    --accent:#ff6a3d; --accent-ink:#140804; --accent-soft:#3a1d13;
+    --ok:#4ade80; --ok-soft:#12301d; --err:#f87171; --err-soft:#3a1517;
+    --warn:#fbbf24; --warn-soft:#352812; --info:#7aa7ff; --info-soft:#15233d;
+    --violet:#b99bff; --violet-soft:#261c3d;
+    --code-bg:#111316; --row-hover:#1a1d21; --row-sel:#2a1a14;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.4);
+    --j-key:#7aa7ff; --j-str:#86efac; --j-num:#fcd34d; --j-lit:#c4b5fd;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d0e10; --surface:#15171a; --surface-2:#1b1e22; --surface-3:#23272c;
+  --border:#262a2f; --border-strong:#353a41;
+  --text:#e8e8ec; --muted:#9b9ea6; --faint:#686c74;
+  --accent:#ff6a3d; --accent-ink:#140804; --accent-soft:#3a1d13;
+  --ok:#4ade80; --ok-soft:#12301d; --err:#f87171; --err-soft:#3a1517;
+  --warn:#fbbf24; --warn-soft:#352812; --info:#7aa7ff; --info-soft:#15233d;
+  --violet:#b99bff; --violet-soft:#261c3d;
+  --code-bg:#111316; --row-hover:#1a1d21; --row-sel:#2a1a14;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.4);
+  --j-key:#7aa7ff; --j-str:#86efac; --j-num:#fcd34d; --j-lit:#c4b5fd;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+a{color:var(--info)}
+.mono{font-family:var(--mono);font-size:12.5px}
+.muted{color:var(--muted)} .faint{color:var(--faint)}
+.hidden{display:none!important}
+
+/* ---------- top bar ---------- */
+.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+.top-inner{max-width:1440px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em;font-size:16px}
+.reel{width:26px;height:26px;border-radius:50%;background:var(--accent);position:relative;flex:none}
+.reel::before,.reel::after{content:"";position:absolute;border-radius:50%;background:var(--bg)}
+.reel::before{inset:8px}
+.reel::after{width:4px;height:4px;top:3px;left:11px;box-shadow:0 16px 0 var(--bg),-8px 8px 0 var(--bg),8px 8px 0 var(--bg)}
+.pills{display:flex;gap:8px;flex-wrap:wrap;flex:1;min-width:0}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;background:var(--surface);font-size:12.5px;max-width:100%;min-width:0}
+.pill b{font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.pill .v{font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill button{border:0;background:none;padding:0;cursor:pointer;color:var(--faint);display:inline-flex}
+.pill button:hover{color:var(--text)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+.dot.on{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent);animation:pulse 2s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 6px transparent}}
+.top-actions{display:flex;gap:6px;align-items:center}
+.demo-badge{font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;background:var(--warn-soft);color:var(--warn);letter-spacing:.03em}
+
+/* ---------- buttons ---------- */
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;transition:background .12s,border-color .12s}
+.btn:hover{background:var(--surface-2);border-color:var(--border-strong)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn.danger{color:var(--err)}
+.btn.danger:hover{background:var(--err-soft);border-color:color-mix(in srgb,var(--err) 40%,transparent)}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover{background:var(--surface-2)}
+.btn.icon{width:32px;padding:0;justify-content:center}
+.btn.sm{height:26px;padding:0 9px;font-size:12px;border-radius:6px}
+svg.i{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* ---------- layout ---------- */
+main{max-width:1440px;margin:0 auto;padding:18px 20px 60px}
+.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr)) minmax(0,2fr);gap:10px;margin-bottom:18px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;min-width:0}
+.stat .k{font-size:11.5px;color:var(--muted);font-weight:500}
+.stat .n{font-size:22px;font-weight:650;letter-spacing:-.02em;margin-top:2px;font-variant-numeric:tabular-nums}
+.stat .s{font-size:11.5px;color:var(--faint);margin-top:1px}
+.stat.click{cursor:pointer}
+.stat.click:hover{border-color:var(--border-strong)}
+.spark{display:flex;align-items:flex-end;gap:2px;height:38px;margin-top:6px}
+.spark i{flex:1;background:var(--accent);opacity:.75;border-radius:2px 2px 0 0;min-height:2px}
+.spark i.z{background:var(--surface-3);opacity:1}
+.spark-axis{display:flex;justify-content:space-between;font-size:10.5px;color:var(--faint);margin-top:3px}
+
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:14px;overflow-x:auto}
+.tab{border:0;background:none;padding:9px 14px;cursor:pointer;color:var(--muted);font-weight:550;border-bottom:2px solid transparent;margin-bottom:-1px;display:flex;gap:7px;align-items:center;white-space:nowrap}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.count{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--surface-2);color:var(--muted);font-variant-numeric:tabular-nums}
+
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px;border-bottom:1px solid var(--border)}
+.search{position:relative;flex:1 1 280px;min-width:200px}
+.search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--faint)}
+.search input{width:100%;height:32px;padding:0 60px 0 32px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);outline:none}
+.search input:focus{border-color:var(--accent);background:var(--surface)}
+.kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);font:11px var(--mono);color:var(--faint);border:1px solid var(--border);border-radius:4px;padding:0 5px;background:var(--surface)}
+select.in,input.in{height:32px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);outline:none;max-width:100%}
+select.in:focus,input.in:focus{border-color:var(--accent)}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{border:0;background:none;padding:0 10px;height:30px;cursor:pointer;font:600 11.5px var(--mono);color:var(--muted);border-right:1px solid var(--border)}
+.seg button:last-child{border-right:0}
+.seg button:hover{background:var(--surface-2)}
+.seg button.on{background:var(--text);color:var(--bg)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 10px 10px;margin-top:-2px}
+.chips:empty{display:none}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:2px 4px 2px 9px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border)}
+.chip.neg{background:var(--err-soft);border-color:transparent;color:var(--err)}
+.chip button{border:0;background:none;cursor:pointer;color:inherit;opacity:.6;padding:0 3px;font-size:14px;line-height:1}
+.chip button:hover{opacity:1}
+
+.bulk{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--accent-soft);border-bottom:1px solid var(--border);font-size:13px;flex-wrap:wrap}
+.bulk b{font-weight:650}
+
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{position:sticky;top:0;text-align:left;font-weight:550;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;background:var(--surface-2);border-bottom:1px solid var(--border);white-space:nowrap;user-select:none}
+th.sort{cursor:pointer}
+th.sort:hover{color:var(--text)}
+th .arr{opacity:.5;margin-left:3px}
+td{padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr{cursor:pointer}
+tbody tr:hover td{background:var(--row-hover)}
+tbody tr.sel td{background:var(--row-sel)}
+tbody tr.active td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+tbody tr.fresh td{animation:fresh 2.4s ease-out}
+@keyframes fresh{from{background:color-mix(in srgb,var(--accent) 22%,transparent)}}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+td.path{max-width:340px;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:12.5px}
+td.path .q{color:var(--faint)}
+.cb{width:34px;padding-right:0}
+input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer;vertical-align:middle}
+
+.m{display:inline-block;font:700 10.5px var(--mono);padding:2px 6px;border-radius:5px;min-width:52px;text-align:center;letter-spacing:.02em}
+.m-GET{background:var(--info-soft);color:var(--info)}
+.m-POST{background:var(--ok-soft);color:var(--ok)}
+.m-PUT{background:var(--warn-soft);color:var(--warn)}
+.m-PATCH{background:var(--violet-soft);color:var(--violet)}
+.m-DELETE{background:var(--err-soft);color:var(--err)}
+.m-OTHER{background:var(--surface-3);color:var(--muted)}
+.st{display:inline-flex;align-items:center;gap:5px;font:600 12px var(--mono)}
+.st::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.st.ok{color:var(--ok)} .st.bad{color:var(--err)} .st.redir{color:var(--warn)} .st.none{color:var(--faint)} .st.none::before{background:none;border:1.5px solid currentColor;width:5px;height:5px}
+.ep{display:inline-block;font-size:12px;padding:1px 7px;border-radius:5px;background:var(--surface-2);border:1px solid var(--border);font-family:var(--mono)}
+.linkish{background:none;border:0;padding:0;cursor:pointer;color:inherit;font:inherit;text-decoration:underline dotted var(--faint);text-underline-offset:3px}
+.linkish:hover{color:var(--accent)}
+
+.footer{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-top:1px solid var(--border);font-size:12.5px;color:var(--muted);gap:10px;flex-wrap:wrap}
+.pager{display:flex;gap:4px;align-items:center}
+
+.empty{padding:56px 20px;text-align:center;color:var(--muted)}
+.empty h3{margin:10px 0 4px;color:var(--text);font-size:15px}
+.empty code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);padding:2px 6px;border-radius:5px}
+
+/* IP bars */
+.bar{height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden;width:120px;display:inline-block;vertical-align:middle}
+.bar i{display:block;height:100%;background:var(--accent)}
+.badge{font-size:11px;font-weight:600;padding:1px 7px;border-radius:5px}
+.badge.local{background:var(--info-soft);color:var(--info)}
+.badge.hidden-ip{background:var(--err-soft);color:var(--err)}
+.badge.fail{background:var(--err-soft);color:var(--err)}
+
+/* endpoints grid */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;padding:12px}
+.card{border:1px solid var(--border);border-radius:var(--radius);padding:14px;background:var(--surface);display:flex;flex-direction:column;gap:10px}
+.card h4{margin:0;font:600 14px var(--mono);display:flex;justify-content:space-between;align-items:center}
+.card .row{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted)}
+.card .row b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.stack{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--surface-3)}
+.stack .a{background:var(--ok)} .stack .b{background:var(--err)} .stack .c{background:var(--faint)}
+
+/* settings */
+.settings{padding:16px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.box{border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.box h4{margin:0 0 4px;font-size:14px}
+.box p{margin:0 0 12px;font-size:12.5px;color:var(--muted)}
+.box.dangerz{border-color:color-mix(in srgb,var(--err) 35%,var(--border))}
+.box .line{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+dl.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0;font-size:13px}
+dl.kv dt{color:var(--muted)} dl.kv dd{margin:0;font-family:var(--mono);font-size:12.5px;word-break:break-all}
+
+/* ---------- drawer ---------- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:40;opacity:0;pointer-events:none;transition:opacity .18s}
+.scrim.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(720px,100vw);background:var(--surface);border-left:1px solid var(--border);z-index:50;transform:translateX(100%);transition:transform .22s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column;box-shadow:var(--shadow)}
+.drawer.open{transform:none}
+.d-head{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:flex-start}
+.d-title{flex:1;min-width:0}
+.d-line{font:600 14px var(--mono);word-break:break-all;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.d-sub{font-size:12.5px;color:var(--muted);margin-top:4px}
+.d-body{flex:1;overflow:auto;padding:14px 16px 28px}
+.d-actions{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:14px}
+.meta div{background:var(--surface);padding:9px 11px;min-width:0}
+.meta .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.meta .v{font-family:var(--mono);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fwd{display:flex;gap:12px;align-items:center;padding:10px 12px;border-radius:var(--radius);border:1px solid var(--border);margin-bottom:14px;font-size:13px;flex-wrap:wrap}
+.fwd.ok{background:var(--ok-soft);border-color:transparent}
+.fwd.bad{background:var(--err-soft);border-color:transparent}
+.fwd .msg{flex:1;min-width:0;font-family:var(--mono);font-size:12px;word-break:break-all}
+.replay-row{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.replay-row input{flex:1;min-width:180px;font-family:var(--mono);font-size:12.5px}
+.subtabs{display:flex;gap:4px;margin-bottom:10px;align-items:center;flex-wrap:wrap}
+.subtabs .tb{border:1px solid transparent;background:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12.5px;color:var(--muted);font-weight:550}
+.subtabs .tb.on{background:var(--surface-2);border-color:var(--border);color:var(--text)}
+.subtabs .sp{flex:1}
+pre.code{margin:0;background:var(--code-bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;overflow:auto;font:12.5px/1.55 var(--mono);max-height:60vh;white-space:pre;tab-size:2}
+pre.code.wrap{white-space:pre-wrap;word-break:break-all}
+.jk{color:var(--j-key)} .js{color:var(--j-str)} .jn{color:var(--j-num)} .jl{color:var(--j-lit)}
+.hx-o{color:var(--faint)} .hx-a{color:var(--muted)}
+table.h td{white-space:normal;word-break:break-all;font-family:var(--mono);font-size:12px;vertical-align:top;cursor:default}
+table.h tr:hover td{background:none}
+table.h td:first-child{color:var(--muted);width:34%;white-space:nowrap}
+.hwrap{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.mark{background:color-mix(in srgb,var(--warn) 30%,transparent);color:inherit;border-radius:2px}
+.secret{filter:blur(4px);transition:filter .15s;cursor:pointer}
+.secret:hover{filter:none}
+
+/* dialog + toast */
+dialog{border:1px solid var(--border);border-radius:14px;background:var(--surface);color:var(--text);padding:0;width:min(420px,calc(100vw - 32px));box-shadow:var(--shadow)}
+dialog::backdrop{background:rgba(0,0,0,.35)}
+.dlg{padding:18px}
+.dlg h3{margin:0 0 6px;font-size:16px}
+.dlg p{margin:0 0 16px;color:var(--muted);font-size:13.5px}
+.dlg .line{display:flex;gap:8px;justify-content:flex-end}
+.toasts{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:100;align-items:center;pointer-events:none}
+.toast{background:var(--text);color:var(--bg);padding:9px 14px;border-radius:9px;font-size:13px;box-shadow:var(--shadow);animation:tin .2s ease-out;display:flex;gap:8px;align-items:center;max-width:calc(100vw - 32px)}
+.toast.err{background:var(--err);color:#fff}
+.toast.ok::before{content:"✓";font-weight:700;color:var(--ok)}
+@keyframes tin{from{opacity:0;transform:translateY(8px)}}
+
+.help{position:fixed;inset:0;display:grid;place-items:center}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:13px;margin-bottom:16px}
+.keys kbd{font:12px var(--mono);border:1px solid var(--border);border-bottom-width:2px;border-radius:5px;padding:1px 6px;background:var(--surface-2)}
+
+@media (max-width:1100px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}.stat.wide{grid-column:span 3}}
+@media (max-width:700px){
+  .top-inner,main{padding-left:16px;padding-right:16px}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat.wide{grid-column:span 2}
+  .meta{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hide-sm{display:none}
+  .pills .pill:not(:first-child){display:none}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4v16a8 8 0 0 0 0-16z" fill="currentColor"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+  <symbol id="i-replay" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v12M6 11l6 6 6-6M5 20h14"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="m5 7 5 5-5 5M12 18h7"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 8v6l-4-2v-4z"/></symbol>
+  <symbol id="i-eyeoff" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3 3.5M6.6 6.6C4.3 8.2 3 12 3 12s4 6 9 6c1.6 0 3-.4 4.3-1.1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M3 12s4-6 9-6 9 6 9 6-4 6-9 6-9-6-9-6z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 13h5l1 3h6l1-3h5M5 5h14l2 8v6H3v-6z"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="top-inner">
+    <div class="brand"><span class="reel" aria-hidden="true"></span>hooktape</div>
+    <span class="demo-badge hidden" id="demoBadge" title="The /api endpoints weren't reachable, so sample data is shown">DEMO DATA</span>
+    <div class="pills">
+      <span class="pill"><span class="dot" id="liveDot"></span><b>Catcher</b><span class="v" id="pCatcher">—</span><button data-copy-el="pCatcher" title="Copy"><svg class="i"><use href="#i-copy"/></svg></button></span>
+      <span class="pill"><b>Public</b><span class="v" id="pPublic">—</span><button data-copy-el="pPublic" title="Copy"><svg class="i"><use href="#i-copy"/></svg></button></span>
+      <span class="pill"><b>Forward</b><span class="v" id="pForward">—</span></span>
+    </div>
+    <div class="top-actions">
+      <button class="btn sm" id="liveBtn" title="Auto-refresh every 3s"><svg class="i"><use href="#i-pause"/></svg><span>Live</span></button>
+      <button class="btn icon ghost" id="refreshBtn" title="Refresh (r)"><svg class="i"><use href="#i-refresh"/></svg></button>
+      <button class="btn icon ghost" id="themeBtn" title="Theme"><svg class="i"><use href="#i-auto"/></svg></button>
+      <button class="btn icon ghost" id="helpBtn" title="Keyboard shortcuts (?)"><span style="font-weight:700">?</span></button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="stats" id="stats"></section>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="requests">Requests <span class="count" id="cReq">0</span></button>
+    <button class="tab" data-tab="ips">IP addresses <span class="count" id="cIp">0</span></button>
+    <button class="tab" data-tab="endpoints">Endpoints <span class="count" id="cEp">0</span></button>
+    <button class="tab" data-tab="settings">Storage &amp; settings</button>
+  </nav>
+
+  <!-- REQUESTS -->
+  <section class="panel" data-panel="requests">
+    <div class="toolbar">
+      <label class="search">
+        <svg class="i"><use href="#i-search"/></svg>
+        <input id="q" type="search" placeholder="Search path, IP, header…  or  method:post status:500 ip:54.187.* ep:stripe" autocomplete="off" spellcheck="false">
+        <span class="kbd">/</span>
+      </label>
+      <div class="seg" id="methodSeg"></div>
+      <select class="in" id="fStatus" title="App response">
+        <option value="">Any app result</option>
+        <option value="2xx">2xx success</option>
+        <option value="3xx">3xx redirect</option>
+        <option value="4xx">4xx client error</option>
+        <option value="5xx">5xx server error</option>
+        <option value="failed">All failures</option>
+        <option value="refused">Refused</option>
+        <option value="timeout">Timeout</option>
+        <option value="none">Not forwarded</option>
+      </select>
+      <select class="in" id="fEndpoint"><option value="">All endpoints</option></select>
+      <select class="in" id="fRange">
+        <option value="">All time</option>
+        <option value="900000">Last 15 min</option>
+        <option value="3600000">Last hour</option>
+        <option value="86400000">Last 24 h</option>
+        <option value="604800000">Last 7 days</option>
+      </select>
+      <button class="btn ghost sm" id="clearFilters">Clear</button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="bulk hidden" id="bulk">
+      <b id="bulkN">0 selected</b>
+      <button class="btn sm" id="bulkReplay"><svg class="i"><use href="#i-replay"/></svg>Replay in order</button>
+      <button class="btn sm" id="bulkExport"><svg class="i"><use href="#i-down"/></svg>Export JSON</button>
+      <button class="btn sm danger" id="bulkDelete"><svg class="i"><use href="#i-trash"/></svg>Delete</button>
+      <span style="flex:1"></span>
+      <button class="btn sm ghost" id="selectAllMatching">Select all matching</button>
+      <button class="btn sm ghost" id="bulkClear">Clear selection</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th class="cb"><input type="checkbox" id="checkAll" title="Select page"></th>
+          <th class="sort num" data-sort="id">ID</th>
+          <th class="sort" data-sort="created_at">Time</th>
+          <th>Endpoint</th>
+          <th>Method</th>
+          <th>Path</th>
+          <th class="sort" data-sort="remote_ip">Remote IP</th>
+          <th class="sort num" data-sort="body_size">Size</th>
+          <th class="sort" data-sort="forward_status">App</th>
+          <th class="sort num hide-sm" data-sort="forward_ms">Latency</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div id="reqEmpty" class="empty hidden"></div>
+    <div class="footer">
+      <span id="reqSummary"></span>
+      <div class="pager">
+        <select class="in" id="pageSize" style="height:26px;font-size:12px"><option>25</option><option selected>50</option><option>100</option><option>250</option></select>
+        <button class="btn sm icon" id="prev"><svg class="i"><use href="#i-left"/></svg></button>
+        <span id="pageInfo" class="mono"></span>
+        <button class="btn sm icon" id="next"><svg class="i"><use href="#i-right"/></svg></button>
+      </div>
+    </div>
+  </section>
+
+  <!-- IPS -->
+  <section class="panel hidden" data-panel="ips">
+    <div class="toolbar">
+      <label class="search">
+        <svg class="i"><use href="#i-search"/></svg>
+        <input id="ipq" type="search" placeholder="Filter IPs — supports wildcards like 54.187.*" autocomplete="off" spellcheck="false">
+      </label>
+      <select class="in" id="ipKind">
+        <option value="">All IPs</option>
+        <option value="public">Public only</option>
+        <option value="local">Loopback / private</option>
+        <option value="failing">With failures</option>
+        <option value="hidden">Hidden IPs</option>
+      </select>
+      <select class="in" id="ipSort">
+        <option value="count">Most requests</option>
+        <option value="last">Most recent</option>
+        <option value="fail">Most failures</option>
+        <option value="ip">IP address</option>
+      </select>
+      <button class="btn sm" id="ipExport"><svg class="i"><use href="#i-down"/></svg>Export CSV</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>IP address</th><th class="num">Requests</th><th>Share</th><th>Endpoints</th><th>Methods</th>
+          <th class="num">Failures</th><th>First seen</th><th>Last seen</th><th style="text-align:right">Actions</th>
+        </tr></thead>
+        <tbody id="ipRows"></tbody>
+      </table>
+    </div>
+    <div id="ipEmpty" class="empty hidden"></div>
+  </section>
+
+  <!-- ENDPOINTS -->
+  <section class="panel hidden" data-panel="endpoints">
+    <div class="grid" id="epGrid"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="panel hidden" data-panel="settings">
+    <div class="settings">
+      <div class="box">
+        <h4>This server</h4>
+        <p>What <span class="mono">hooktape up</span> is running with.</p>
+        <dl class="kv" id="serverKv"></dl>
+      </div>
+      <div class="box">
+        <h4>Replay target</h4>
+        <p>Default URL used when you replay from this page. Saved in this browser only.</p>
+        <div class="line">
+          <input class="in mono" id="defTarget" style="flex:1;min-width:200px" placeholder="http://localhost:3000">
+          <button class="btn" id="saveTarget">Save</button>
+        </div>
+      </div>
+      <div class="box">
+        <h4>Display</h4>
+        <p>Header values that look like secrets (signatures, tokens) are blurred until you hover.</p>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" id="optBlur" checked> Blur secret-looking headers</label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:8px"><input type="checkbox" id="optLocal"> Hide loopback requests (127.0.0.1, ::1)</label>
+      </div>
+      <div class="box dangerz">
+        <h4>Clean up</h4>
+        <p>Deletes rows from the SQLite file. This can't be undone.</p>
+        <div class="line" style="margin-bottom:10px">
+          <span style="font-size:13px">Delete requests older than</span>
+          <select class="in" id="olderThan">
+            <option value="3600000">1 hour</option>
+            <option value="86400000" selected>1 day</option>
+            <option value="604800000">7 days</option>
+            <option value="2592000000">30 days</option>
+          </select>
+          <button class="btn danger" id="deleteOlder"><svg class="i"><use href="#i-trash"/></svg>Delete</button>
+        </div>
+        <div class="line">
+          <button class="btn danger" id="deleteFiltered"><svg class="i"><use href="#i-filter"/></svg>Delete everything matching current filters</button>
+          <button class="btn danger" id="deleteAll"><svg class="i"><use href="#i-trash"/></svg>Delete all</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="d-head">
+    <div class="d-title">
+      <div class="d-line" id="dLine"></div>
+      <div class="d-sub" id="dSub"></div>
+    </div>
+    <button class="btn icon ghost" id="dPrev" title="Newer (k)"><svg class="i" style="transform:rotate(90deg)"><use href="#i-left"/></svg></button>
+    <button class="btn icon ghost" id="dNext" title="Older (j)"><svg class="i" style="transform:rotate(90deg)"><use href="#i-right"/></svg></button>
+    <button class="btn icon ghost" id="dClose" title="Close (Esc)"><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="d-body" id="dBody"></div>
+</aside>
+
+<dialog id="confirm"><form method="dialog" class="dlg">
+  <h3 id="cTitle"></h3><p id="cText"></p>
+  <div class="line"><button class="btn" value="no">Cancel</button><button class="btn primary" id="cYes" value="yes">Confirm</button></div>
+</form></dialog>
+
+<dialog id="help"><form method="dialog" class="dlg">
+  <h3>Keyboard shortcuts</h3>
+  <div class="keys" style="margin-top:12px">
+    <kbd>/</kbd><span>Focus search</span>
+    <kbd>j</kbd><span>Next (older) request</span>
+    <kbd>k</kbd><span>Previous (newer) request</span>
+    <kbd>Enter</kbd><span>Open selected request</span>
+    <kbd>x</kbd><span>Toggle selection of open request</span>
+    <kbd>p</kbd><span>Replay open request</span>
+    <kbd>Del</kbd><span>Delete open request</span>
+    <kbd>r</kbd><span>Refresh</span>
+    <kbd>l</kbd><span>Toggle live updates</span>
+    <kbd>t</kbd><span>Cycle theme</span>
+    <kbd>Esc</kbd><span>Close panel / clear search</span>
+  </div>
+  <p style="margin:0 0 12px;font-size:12.5px;color:var(--muted)">Search syntax: <span class="mono">method:post status:5xx ip:54.187.* ep:stripe id:42 -ip:127.0.0.1</span>. A leading <span class="mono">-</span> excludes.</p>
+  <div class="line" style="display:flex;justify-content:flex-end"><button class="btn primary">Done</button></div>
+</form></dialog>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+"use strict";
+/* ============================================================
+   hooktape dashboard — talks to the local `hooktape up` server.
+   API (JSON, all under /api):
+     GET  /api/status                       -> {version, db, catcher, public, forward, endpoint_hint, started_at}
+     GET  /api/requests?limit=N             -> [Request without body, with body_size]
+     GET  /api/requests/{id}                -> Request (body as base64, Go's []byte default)
+     POST /api/requests/{id}/replay {target}-> {status, ms, error, body}
+     POST /api/requests/delete {ids:[...]}  -> {deleted}
+     POST /api/requests/delete {older_than_ms} -> {deleted}
+     POST /api/requests/delete {all:true}   -> {deleted}
+   If /api/status can't be reached, the page runs on built-in demo data.
+   ============================================================ */
+
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("hooktape:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("hooktape:" + k, JSON.stringify(v)); } catch {} }
+};
+const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+const SECRET_RE = /(signature|secret|token|authorization|api[-_]?key|cookie|hmac|x-hub-signature)/i;
+
+const state = {
+  demo: false, status: {}, all: [], byId: new Map(), detail: new Map(),
+  q: "", methods: new Set(), fStatus: "", fEndpoint: "", fRange: 0,
+  ipInclude: null, ipExclude: new Set(store.get("hiddenIps", [])),
+  sort: { key: "id", dir: -1 }, page: 0, pageSize: 50,
+  selected: new Set(), activeId: null, live: store.get("live", true),
+  freshIds: new Set(), maxId: 0, filtered: [],
+  bodyView: "pretty", dTab: "body", headerQ: "",
+  blur: store.get("blur", true), hideLocal: store.get("hideLocal", false),
+  target: store.get("target", "")
+};
+
+/* ---------------- helpers ---------------- */
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function humanSize(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1048576).toFixed(1) + " MB";
+}
+const pad = n => String(n).padStart(2, "0");
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtTime(ms) {
+  const d = new Date(ms), now = new Date();
+  const hms = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return d.toDateString() === now.toDateString() ? hms : `${MON[d.getMonth()]} ${pad(d.getDate())} ${hms.slice(0, 5)}`;
+}
+function fmtFull(ms) { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`; }
+function ago(ms) {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return s + "s ago"; if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago"; return Math.floor(s / 86400) + "d ago";
+}
+/* mirrors render.ForwardLabel */
+function fwdLabel(r) {
+  const e = (r.forward_error || "").toLowerCase();
+  if (r.forward_status) return String(r.forward_status);
+  if (!e) return "-";
+  if (e.includes("refused")) return "refused";
+  if (e.includes("timeout") || e.includes("deadline")) return "timeout";
+  return "error";
+}
+function fwdClass(r) {
+  const l = fwdLabel(r);
+  if (l === "-") return "none";
+  const n = +l;
+  if (n >= 200 && n < 300) return "ok";
+  if (n >= 300 && n < 400) return "redir";
+  return "bad";
+}
+const isFail = r => fwdClass(r) === "bad";
+function isLocalIP(ip) {
+  return /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fe80:|fc|fd|localhost)/i.test(ip || "");
+}
+function globMatch(pattern, s) {
+  if (!pattern.includes("*")) return s.toLowerCase().includes(pattern.toLowerCase());
+  const re = new RegExp("^" + pattern.split("*").map(p => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i");
+  return re.test(s);
+}
+function b64ToBytes(b64) {
+  if (!b64) return new Uint8Array();
+  const bin = atob(b64), out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function bytesToB64(bytes) {
+  let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function utf8(bytes) { try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return null; } }
+function headerGet(h, name) {
+  if (!h) return "";
+  const k = Object.keys(h).find(k => k.toLowerCase() === name.toLowerCase());
+  return k ? (h[k] || []).join(", ") : "";
+}
+function icon(id) { return `<svg class="i"><use href="#i-${id}"/></svg>`; }
+function toast(msg, kind = "") {
+  const t = document.createElement("div"); t.className = "toast " + kind; t.textContent = msg;
+  $("#toasts").append(t); setTimeout(() => t.remove(), 3200);
+}
+async function copy(text, label = "Copied") {
+  try { await navigator.clipboard.writeText(text); toast(label, "ok"); }
+  catch { const ta = document.createElement("textarea"); ta.value = text; document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast(label, "ok"); }
+}
+function confirmBox(title, text, yes = "Delete") {
+  const d = $("#confirm"); $("#cTitle").textContent = title; $("#cText").textContent = text; $("#cYes").textContent = yes;
+  d.showModal();
+  return new Promise(res => d.addEventListener("close", () => res(d.returnValue === "yes"), { once: true }));
+}
+function download(name, text, type = "application/json") {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/* ---------------- API ---------------- */
+async function api(path, opts = {}) {
+  if (state.demo) return Demo.handle(path, opts);
+  const r = await fetch("/api" + path, {
+    method: opts.method || "GET",
+    headers: opts.body ? { "Content-Type": "application/json" } : {},
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  if (!r.ok) throw new Error((await r.text()).trim() || ("HTTP " + r.status));
+  return r.status === 204 ? null : r.json();
+}
+
+async function boot() {
+  try {
+    if (!location.protocol.startsWith("http")) throw new Error("file");
+    state.status = await api("/status");
+  } catch {
+    state.demo = true; Demo.init();
+    state.status = await api("/status");
+    $("#demoBadge").classList.remove("hidden");
+  }
+  if (!state.target) state.target = state.status.forward || "http://localhost:3000";
+  renderStatus();
+  await load(true);
+  setLive(state.live);
+}
+
+async function load(first = false) {
+  try {
+    const list = await api("/requests?limit=5000");
+    const prevMax = state.maxId;
+    state.all = list || [];
+    state.byId = new Map(state.all.map(r => [r.id, r]));
+    state.maxId = state.all.reduce((m, r) => Math.max(m, r.id), 0);
+    if (!first) state.all.forEach(r => { if (r.id > prevMax) state.freshIds.add(r.id); });
+    for (const id of state.selected) if (!state.byId.has(id)) state.selected.delete(id);
+    render();
+    setTimeout(() => state.freshIds.clear(), 2500);
+  } catch (e) {
+    toast("Couldn't load requests: " + e.message, "err");
+  }
+}
+
+let liveTimer = null;
+function setLive(on) {
+  state.live = on; store.set("live", on);
+  clearInterval(liveTimer);
+  if (on) liveTimer = setInterval(() => { if (!document.hidden) load(); }, 3000);
+  $("#liveDot").classList.toggle("on", on);
+  $("#liveBtn").innerHTML = on ? `${icon("pause")}<span>Live</span>` : `${icon("play")}<span>Paused</span>`;
+}
+
+/* ---------------- filtering ---------------- */
+function parseQuery(q) {
+  const tokens = q.match(/(-?\w+:"[^"]*"|-?\w+:\S+|"[^"]*"|\S+)/g) || [];
+  const out = { text: [], terms: [] };
+  for (let t of tokens) {
+    const m = t.match(/^(-?)(\w+):(.*)$/);
+    if (m && ["method", "m", "status", "s", "app", "ip", "ep", "endpoint", "id", "path", "header", "h"].includes(m[2].toLowerCase())) {
+      out.terms.push({ neg: m[1] === "-", key: m[2].toLowerCase(), val: m[3].replace(/^"|"$/g, "") });
+    } else out.text.push(t.replace(/^"|"$/g, "").toLowerCase());
+  }
+  return out;
+}
+function statusMatches(r, v) {
+  v = String(v).toLowerCase(); const l = fwdLabel(r), n = +l;
+  if (/^\dxx$/.test(v)) return n >= +v[0] * 100 && n < +v[0] * 100 + 100;
+  if (v === "failed" || v === "fail") return isFail(r);
+  if (v === "none" || v === "-") return l === "-";
+  if (v === "ok") return fwdClass(r) === "ok";
+  return l === v;
+}
+function termMatches(r, t) {
+  const v = t.val;
+  switch (t.key) {
+    case "method": case "m": return r.method.toLowerCase() === v.toLowerCase();
+    case "status": case "s": case "app": return statusMatches(r, v);
+    case "ip": return globMatch(v, r.remote_ip || "");
+    case "ep": case "endpoint": return globMatch(v, r.endpoint);
+    case "id": return String(r.id) === v.replace("#", "");
+    case "path": return globMatch(v, r.path);
+    case "header": case "h": {
+      const [hk, hv] = v.split("=");
+      const got = headerGet(r.headers, hk);
+      return hv == null ? !!got : globMatch(hv, got);
+    }
+  }
+  return true;
+}
+function haystack(r) {
+  if (!r._hay) {
+    const hv = r.headers ? Object.entries(r.headers).map(([k, v]) => k + ": " + v.join(",")).join(" ") : "";
+    r._hay = `#${r.id} ${r.method} ${r.endpoint} ${r.path}?${r.query} ${r.remote_ip} ${fwdLabel(r)} ${r.forward_error} ${hv}`.toLowerCase();
+  }
+  return r._hay;
+}
+function applyFilters() {
+  const pq = parseQuery(state.q);
+  const since = state.fRange ? Date.now() - state.fRange : 0;
+  let rows = state.all.filter(r => {
+    if (state.methods.size) {
+      const m = METHODS.includes(r.method) ? r.method : "OTHER";
+      if (!state.methods.has(m)) return false;
+    }
+    if (state.fStatus && !statusMatches(r, state.fStatus)) return false;
+    if (state.fEndpoint && r.endpoint !== state.fEndpoint) return false;
+    if (since && r.created_at < since) return false;
+    if (state.ipInclude && r.remote_ip !== state.ipInclude) return false;
+    if (state.ipExclude.has(r.remote_ip)) return false;
+    if (state.hideLocal && /^(127\.|::1$)/.test(r.remote_ip)) return false;
+    for (const t of pq.terms) if (termMatches(r, t) === t.neg) return false;
+    if (pq.text.length) { const h = haystack(r); for (const w of pq.text) if (!h.includes(w)) return false; }
+    return true;
+  });
+  const { key, dir } = state.sort;
+  rows.sort((a, b) => {
+    let x = a[key], y = b[key];
+    if (key === "forward_status") { x = a.forward_status || (a.forward_error ? 999 : -1); y = b.forward_status || (b.forward_error ? 999 : -1); }
+    if (typeof x === "string") return x.localeCompare(y, undefined, { numeric: true }) * dir;
+    return ((x > y) - (x < y)) * dir || (b.id - a.id);
+  });
+  state.filtered = rows;
+  return rows;
+}
+
+/* ---------------- render ---------------- */
+function render() {
+  renderFilterOptions();
+  const rows = applyFilters();
+  renderStats();
+  renderChips();
+  renderRequests(rows);
+  renderIPs();
+  renderEndpoints();
+  renderServerKv();
+  $("#cReq").textContent = state.all.length;
+}
+
+function renderStatus() {
+  const s = state.status;
+  $("#pCatcher").textContent = s.catcher || "—";
+  const pub = s.public ? s.public.replace(/\/$/, "") + "/h/" + (s.endpoint_hint || "demo") + "/" : "local only";
+  $("#pPublic").textContent = pub;
+  $("#pForward").textContent = s.forward || "capture only";
+  $("#defTarget").value = state.target;
+}
+
+function renderStats() {
+  const all = state.all, n = all.length;
+  const ok = all.filter(r => fwdClass(r) === "ok").length;
+  const bad = all.filter(isFail).length;
+  const none = all.filter(r => fwdLabel(r) === "-").length;
+  const ips = new Set(all.map(r => r.remote_ip)).size;
+  const bytes = all.reduce((s, r) => s + (r.body_size || 0), 0);
+  const attempted = n - none;
+  // last 24h hourly
+  const now = Date.now(), buckets = new Array(24).fill(0);
+  for (const r of all) { const h = Math.floor((now - r.created_at) / 3600000); if (h >= 0 && h < 24) buckets[23 - h]++; }
+  const max = Math.max(1, ...buckets);
+  $("#stats").innerHTML = `
+    <div class="stat click" data-stat=""><div class="k">Captured</div><div class="n">${n.toLocaleString()}</div><div class="s">${humanSize(bytes)} of bodies</div></div>
+    <div class="stat click" data-stat="2xx"><div class="k">App 2xx</div><div class="n" style="color:var(--ok)">${ok.toLocaleString()}</div><div class="s">${attempted ? Math.round(ok / attempted * 100) : 0}% of forwarded</div></div>
+    <div class="stat click" data-stat="failed"><div class="k">App failures</div><div class="n" style="color:${bad ? "var(--err)" : "inherit"}">${bad.toLocaleString()}</div><div class="s">4xx · 5xx · refused · timeout</div></div>
+    <div class="stat click" data-stat="none"><div class="k">Not forwarded</div><div class="n">${none.toLocaleString()}</div><div class="s">capture only / queue full</div></div>
+    <div class="stat click" data-stat="ips"><div class="k">Unique IPs</div><div class="n">${ips.toLocaleString()}</div><div class="s">${state.ipExclude.size} hidden</div></div>
+    <div class="stat wide"><div class="k">Requests per hour · last 24 h</div>
+      <div class="spark">${buckets.map((b, i) => `<i class="${b ? "" : "z"}" style="height:${b ? Math.max(8, b / max * 100) : 6}%" title="${b} request${b === 1 ? "" : "s"} · ${23 - i}h ago"></i>`).join("")}</div>
+      <div class="spark-axis"><span>24h ago</span><span>12h</span><span>now</span></div></div>`;
+}
+
+function renderFilterOptions() {
+  const eps = [...new Set(state.all.map(r => r.endpoint))].sort();
+  const sel = $("#fEndpoint"), cur = state.fEndpoint;
+  const html = `<option value="">All endpoints</option>` + eps.map(e => `<option ${e === cur ? "selected" : ""}>${esc(e)}</option>`).join("");
+  if (sel.innerHTML !== html) sel.innerHTML = html;
+  $("#cEp").textContent = eps.length;
+}
+
+function renderChips() {
+  const c = [];
+  if (state.ipInclude) c.push(`<span class="chip">ip = <b class="mono">${esc(state.ipInclude)}</b><button data-unchip="ipInclude">×</button></span>`);
+  for (const ip of state.ipExclude) c.push(`<span class="chip neg">hidden <b class="mono">${esc(ip)}</b><button data-unhide="${esc(ip)}">×</button></span>`);
+  if (state.hideLocal) c.push(`<span class="chip neg">loopback hidden<button data-unchip="hideLocal">×</button></span>`);
+  $("#chips").innerHTML = c.join("");
+}
+
+function renderRequests(rows) {
+  const total = rows.length, ps = state.pageSize;
+  const pages = Math.max(1, Math.ceil(total / ps));
+  state.page = Math.min(state.page, pages - 1);
+  const slice = rows.slice(state.page * ps, state.page * ps + ps);
+  const maxIp = null;
+  $("#rows").innerHTML = slice.map(r => {
+    const cls = [state.selected.has(r.id) ? "sel" : "", r.id === state.activeId ? "active" : "", state.freshIds.has(r.id) ? "fresh" : ""].join(" ");
+    const m = METHODS.includes(r.method) ? r.method : "OTHER";
+    const fl = fwdLabel(r), fc = fwdClass(r);
+    return `<tr data-id="${r.id}" class="${cls}">
+      <td class="cb"><input type="checkbox" data-check="${r.id}" ${state.selected.has(r.id) ? "checked" : ""}></td>
+      <td class="num mono">#${r.id}</td>
+      <td class="mono" title="${esc(fmtFull(r.created_at))}">${fmtTime(r.created_at)}</td>
+      <td><span class="ep">${esc(r.endpoint)}</span></td>
+      <td><span class="m m-${m}">${esc(r.method)}</span></td>
+      <td class="path" title="${esc(r.path + (r.query ? "?" + r.query : ""))}">${esc(r.path)}${r.query ? `<span class="q">?${esc(r.query)}</span>` : ""}</td>
+      <td class="mono"><button class="linkish" data-ip="${esc(r.remote_ip)}" title="Show only this IP">${esc(r.remote_ip || "—")}</button></td>
+      <td class="num mono">${humanSize(r.body_size || 0)}</td>
+      <td><span class="st ${fc}" title="${esc(r.forward_error || "")}">${esc(fl)}</span></td>
+      <td class="num mono hide-sm faint">${r.forward_ms ? r.forward_ms + " ms" : ""}</td>
+    </tr>`;
+  }).join("");
+
+  const empty = $("#reqEmpty");
+  if (!state.all.length) {
+    empty.innerHTML = `${icon("inbox").replace('class="i"', 'class="i" style="width:34px;height:34px"')}<h3>No requests yet</h3>
+      <div>Send a webhook to <code>${esc((state.status.public || state.status.catcher || "http://127.0.0.1:8080").replace(/\/$/, ""))}/h/&lt;endpoint&gt;/…</code></div>`;
+  } else if (!total) {
+    empty.innerHTML = `<h3>Nothing matches these filters</h3><div><button class="btn sm" data-action="clear">Clear filters</button></div>`;
+  }
+  empty.classList.toggle("hidden", total > 0);
+
+  const pageIds = slice.map(r => r.id);
+  const ca = $("#checkAll");
+  ca.checked = pageIds.length > 0 && pageIds.every(id => state.selected.has(id));
+  ca.indeterminate = !ca.checked && pageIds.some(id => state.selected.has(id));
+
+  $("#reqSummary").textContent = total === state.all.length
+    ? `${total.toLocaleString()} request${total === 1 ? "" : "s"}`
+    : `${total.toLocaleString()} of ${state.all.length.toLocaleString()} match`;
+  $("#pageInfo").textContent = `${state.page + 1} / ${pages}`;
+  $("#prev").disabled = state.page === 0; $("#next").disabled = state.page >= pages - 1;
+
+  $$("th[data-sort]").forEach(th => {
+    const on = th.dataset.sort === state.sort.key;
+    th.querySelector(".arr")?.remove();
+    if (on) th.insertAdjacentHTML("beforeend", `<span class="arr">${state.sort.dir < 0 ? "↓" : "↑"}</span>`);
+  });
+
+  const bn = state.selected.size;
+  $("#bulk").classList.toggle("hidden", !bn);
+  $("#bulkN").textContent = `${bn} selected`;
+  $("#selectAllMatching").textContent = `Select all ${total} matching`;
+  $("#selectAllMatching").classList.toggle("hidden", bn >= total);
+}
+
+function ipAggregate() {
+  const map = new Map();
+  for (const r of state.all) {
+    const ip = r.remote_ip || "unknown";
+    let a = map.get(ip);
+    if (!a) map.set(ip, a = { ip, count: 0, fail: 0, first: Infinity, last: 0, eps: new Set(), methods: new Set(), bytes: 0 });
+    a.count++; if (isFail(r)) a.fail++;
+    a.first = Math.min(a.first, r.created_at); a.last = Math.max(a.last, r.created_at);
+    a.eps.add(r.endpoint); a.methods.add(r.method); a.bytes += r.body_size || 0;
+  }
+  return [...map.values()];
+}
+function renderIPs() {
+  let list = ipAggregate();
+  $("#cIp").textContent = list.length;
+  const q = $("#ipq").value.trim(), kind = $("#ipKind").value, sort = $("#ipSort").value;
+  if (q) list = list.filter(a => globMatch(q, a.ip));
+  if (kind === "public") list = list.filter(a => !isLocalIP(a.ip));
+  if (kind === "local") list = list.filter(a => isLocalIP(a.ip));
+  if (kind === "failing") list = list.filter(a => a.fail);
+  if (kind === "hidden") list = list.filter(a => state.ipExclude.has(a.ip));
+  const cmp = { count: (a, b) => b.count - a.count, last: (a, b) => b.last - a.last, fail: (a, b) => b.fail - a.fail || b.count - a.count,
+    ip: (a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }) }[sort];
+  list.sort(cmp);
+  const max = Math.max(1, ...list.map(a => a.count)), total = state.all.length || 1;
+  $("#ipRows").innerHTML = list.map(a => {
+    const hidden = state.ipExclude.has(a.ip);
+    return `<tr data-iprow="${esc(a.ip)}" style="${hidden ? "opacity:.55" : ""}">
+      <td class="mono"><b>${esc(a.ip)}</b> ${isLocalIP(a.ip) ? `<span class="badge local">local</span>` : ""} ${hidden ? `<span class="badge hidden-ip">hidden</span>` : ""}</td>
+      <td class="num mono">${a.count}</td>
+      <td><span class="bar"><i style="width:${a.count / max * 100}%"></i></span> <span class="faint mono" style="font-size:11.5px">${Math.round(a.count / total * 100)}%</span></td>
+      <td>${[...a.eps].slice(0, 3).map(e => `<span class="ep">${esc(e)}</span>`).join(" ")}${a.eps.size > 3 ? ` <span class="faint">+${a.eps.size - 3}</span>` : ""}</td>
+      <td class="mono faint" style="font-size:11.5px">${[...a.methods].join(" ")}</td>
+      <td class="num">${a.fail ? `<span class="badge fail">${a.fail}</span>` : `<span class="faint">0</span>`}</td>
+      <td class="mono faint" title="${esc(fmtFull(a.first))}">${fmtTime(a.first)}</td>
+      <td class="mono" title="${esc(fmtFull(a.last))}">${ago(a.last)}</td>
+      <td style="text-align:right">
+        <button class="btn sm" data-ipact="show" data-v="${esc(a.ip)}">${icon("filter")}Requests</button>
+        <button class="btn sm" data-ipact="${hidden ? "unhide" : "hide"}" data-v="${esc(a.ip)}" title="${hidden ? "Show again" : "Hide from request list"}">${icon(hidden ? "eye" : "eyeoff")}</button>
+        <button class="btn sm" data-ipact="copy" data-v="${esc(a.ip)}" title="Copy IP">${icon("copy")}</button>
+        <button class="btn sm danger" data-ipact="delete" data-v="${esc(a.ip)}" title="Delete all requests from this IP">${icon("trash")}</button>
+      </td></tr>`;
+  }).join("");
+  const e = $("#ipEmpty");
+  e.innerHTML = state.all.length ? "<h3>No IPs match</h3>" : "<h3>No IPs yet</h3><div>IPs appear once requests arrive.</div>";
+  e.classList.toggle("hidden", list.length > 0);
+}
+
+function renderEndpoints() {
+  const map = new Map();
+  for (const r of state.all) {
+    let a = map.get(r.endpoint);
+    if (!a) map.set(r.endpoint, a = { ep: r.endpoint, n: 0, ok: 0, bad: 0, none: 0, last: 0, ips: new Set(), paths: new Map() });
+    a.n++; const c = fwdClass(r); if (c === "ok") a.ok++; else if (c === "bad") a.bad++; else if (c === "none") a.none++;
+    a.last = Math.max(a.last, r.created_at); a.ips.add(r.remote_ip);
+    a.paths.set(r.path, (a.paths.get(r.path) || 0) + 1);
+  }
+  const list = [...map.values()].sort((a, b) => b.last - a.last);
+  const base = (state.status.public || state.status.catcher || "").replace(/\/$/, "");
+  $("#epGrid").innerHTML = list.length ? list.map(a => {
+    const top = [...a.paths.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3);
+    const url = `${base}/h/${a.ep}/`;
+    return `<div class="card">
+      <h4><span>${esc(a.ep)}</span><span class="faint" style="font:12px var(--sans)">${ago(a.last)}</span></h4>
+      <div class="stack" title="${a.ok} ok · ${a.bad} failed · ${a.none} not forwarded"><i class="a" style="width:${a.ok / a.n * 100}%"></i><i class="b" style="width:${a.bad / a.n * 100}%"></i><i class="c" style="width:${a.none / a.n * 100}%"></i></div>
+      <div class="row"><span>Requests</span><b>${a.n}</b></div>
+      <div class="row"><span>App failures</span><b style="color:${a.bad ? "var(--err)" : "inherit"}">${a.bad}</b></div>
+      <div class="row"><span>Unique IPs</span><b>${a.ips.size}</b></div>
+      <div style="font-size:12px" class="mono faint">${top.map(([p, c]) => `${esc(p)} <span>×${c}</span>`).join("<br>")}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn sm" data-epact="show" data-v="${esc(a.ep)}">${icon("filter")}View requests</button>
+        <button class="btn sm" data-epact="copy" data-v="${esc(url)}">${icon("copy")}Copy URL</button>
+        <button class="btn sm danger" data-epact="delete" data-v="${esc(a.ep)}">${icon("trash")}</button>
+      </div></div>`;
+  }).join("") : `<div class="empty" style="grid-column:1/-1"><h3>No endpoints yet</h3><div>Any name works: <code>/h/stripe-dev/…</code>, <code>/h/github/…</code></div></div>`;
+}
+
+function renderServerKv() {
+  const s = state.status;
+  const rows = [["Version", s.version], ["Database", s.db], ["Catcher", s.catcher], ["Public URL", s.public || "none (local only)"],
+    ["Forward", s.forward || "capture only"], ["Started", s.started_at ? fmtFull(s.started_at) + " (" + ago(s.started_at) + ")" : "—"],
+    ["Retention", s.retention || "keep forever"]];
+  $("#serverKv").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v || "—")}</dd>`).join("");
+}
+
+/* ---------------- detail drawer ---------------- */
+async function openDetail(id) {
+  state.activeId = id;
+  $$("#rows tr").forEach(tr => tr.classList.toggle("active", +tr.dataset.id === id));
+  $("#drawer").classList.add("open"); $("#scrim").classList.add("open"); $("#drawer").setAttribute("aria-hidden", "false");
+  const row = state.byId.get(id);
+  if (row) paintDetail(row, null);
+  try {
+    let full = state.detail.get(id);
+    if (!full) { full = await api("/requests/" + id); state.detail.set(id, full); }
+    if (state.activeId === id) paintDetail(full, b64ToBytes(full.body));
+  } catch (e) { toast("Couldn't load #" + id + ": " + e.message, "err"); }
+}
+function closeDetail() {
+  state.activeId = null;
+  $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); $("#drawer").setAttribute("aria-hidden", "true");
+  $$("#rows tr.active").forEach(tr => tr.classList.remove("active"));
+}
+function stepDetail(delta) {
+  const ids = state.filtered.map(r => r.id);
+  if (!ids.length) return;
+  let i = ids.indexOf(state.activeId);
+  i = i < 0 ? 0 : Math.min(ids.length - 1, Math.max(0, i + delta));
+  const id = ids[i];
+  const page = Math.floor(i / state.pageSize);
+  if (page !== state.page) { state.page = page; renderRequests(state.filtered); }
+  openDetail(id);
+  $(`#rows tr[data-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+function prettyJSON(text) {
+  let obj; try { obj = JSON.parse(text); } catch { return null; }
+  const s = esc(JSON.stringify(obj, null, 2));
+  return s.replace(/(&quot;(?:\\.|[^\\])*?&quot;)(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+    (m, str, colon, lit, num) => str ? (colon ? `<span class="jk">${str}</span>${colon}` : `<span class="js">${str}</span>`)
+      : lit ? `<span class="jl">${lit}</span>` : `<span class="jn">${num}</span>`);
+}
+function hexDump(bytes, limit = 4096) {
+  const lines = [], n = Math.min(bytes.length, limit);
+  for (let i = 0; i < n; i += 16) {
+    const chunk = bytes.subarray(i, Math.min(i + 16, n));
+    const hex = [...chunk].map(b => b.toString(16).padStart(2, "0")).join(" ").padEnd(47, " ");
+    const asc = [...chunk].map(b => b >= 32 && b < 127 ? String.fromCharCode(b) : ".").join("");
+    lines.push(`<span class="hx-o">${i.toString(16).padStart(8, "0")}</span>  ${hex}  <span class="hx-a">${esc(asc)}</span>`);
+  }
+  if (bytes.length > limit) lines.push(`<span class="hx-o">… ${bytes.length - limit} more bytes</span>`);
+  return lines.join("\n");
+}
+function bodyHTML(bytes, ct) {
+  if (!bytes) return `<span class="faint">Loading…</span>`;
+  if (!bytes.length) return `<span class="faint">&lt;empty body&gt;</span>`;
+  const text = utf8(bytes);
+  const view = state.bodyView;
+  if (view === "hex" || text == null) {
+    return (text == null && view !== "hex" ? `<span class="faint">&lt;${bytes.length} bytes binary${/gzip/i.test(ct) ? ", gzip-encoded" : ""}&gt;</span>\n\n` : "") + hexDump(bytes);
+  }
+  if (view === "pretty") {
+    const j = prettyJSON(text); if (j) return j;
+    if (/x-www-form-urlencoded/i.test(ct)) {
+      try { return [...new URLSearchParams(text)].map(([k, v]) => `<span class="jk">${esc(k)}</span> = <span class="js">${esc(v)}</span>`).join("\n"); } catch {}
+    }
+  }
+  return esc(text);
+}
+function curlFor(r, bytes) {
+  const base = (state.status.catcher || "http://127.0.0.1:8080").replace(/\/$/, "");
+  const url = `${base}/h/${r.endpoint}${r.path === "/" ? "" : r.path}${r.query ? "?" + r.query : ""}`;
+  const sq = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
+  const skip = /^(host|content-length|connection|accept-encoding|cf-|cdn-loop|x-forwarded-)/i;
+  const parts = [`curl -X ${r.method} ${sq(url)}`];
+  for (const [k, vs] of Object.entries(r.headers || {})) if (!skip.test(k)) for (const v of vs) parts.push(`-H ${sq(k + ": " + v)}`);
+  if (bytes && bytes.length) {
+    const t = utf8(bytes);
+    parts.push(t != null ? `--data-binary ${sq(t)}` : `--data-binary @body.bin`);
+  }
+  return parts.join(" \\\n  ");
+}
+
+function paintDetail(r, bytes) {
+  const m = METHODS.includes(r.method) ? r.method : "OTHER";
+  $("#dLine").innerHTML = `<span class="m m-${m}">${esc(r.method)}</span><span>${esc(r.path)}${r.query ? `<span class="faint">?${esc(r.query)}</span>` : ""}</span>`;
+  $("#dSub").innerHTML = `#${r.id} · endpoint <span class="ep">${esc(r.endpoint)}</span> · ${humanSize(r.body_size ?? (bytes ? bytes.length : 0))} · ${esc(fmtFull(r.created_at))} <span class="faint">(${ago(r.created_at)})</span>`;
+  const ct = headerGet(r.headers, "content-type");
+  const fc = fwdClass(r), fl = fwdLabel(r);
+  const fwdMsg = fl === "-" ? "Not forwarded yet." : fc === "ok" ? `App answered ${fl}` : r.forward_error || `App answered ${fl}`;
+  const headers = Object.entries(r.headers || {}).sort((a, b) => a[0].localeCompare(b[0]));
+  const hq = state.headerQ.toLowerCase();
+  const hl = s => hq ? esc(s).replace(new RegExp(hq.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), x => `<span class="mark">${x}</span>`) : esc(s);
+  const hRows = headers.filter(([k, v]) => !hq || (k + v.join(",")).toLowerCase().includes(hq))
+    .map(([k, vs]) => vs.map(v => `<tr><td>${hl(k)}</td><td><span class="${state.blur && SECRET_RE.test(k) ? "secret" : ""}">${hl(v)}</span></td></tr>`).join("")).join("");
+  const qp = r.query ? [...new URLSearchParams(r.query)] : [];
+  const sel = state.selected.has(r.id);
+
+  $("#dBody").innerHTML = `
+    <div class="d-actions">
+      <button class="btn primary" data-d="replay">${icon("replay")}Replay</button>
+      <button class="btn" data-d="curl">${icon("term")}Copy as cURL</button>
+      <button class="btn" data-d="dl" ${bytes ? "" : "disabled"}>${icon("down")}Download body</button>
+      <button class="btn" data-d="json">${icon("copy")}Copy JSON</button>
+      <button class="btn" data-d="select">${sel ? "Unselect" : "Select"}</button>
+      <span style="flex:1"></span>
+      <button class="btn danger" data-d="delete">${icon("trash")}Delete</button>
+    </div>
+    <div class="replay-row">
+      <input class="in" id="dTarget" value="${esc(state.target)}" placeholder="http://localhost:3000" title="Replay target">
+    </div>
+    <div class="fwd ${fc === "ok" ? "ok" : fc === "bad" ? "bad" : ""}">
+      <span class="st ${fc}">${esc(fl === "-" ? "not forwarded" : fl)}</span>
+      <span class="msg">${esc(fwdMsg)}</span>
+      ${r.forward_ms ? `<span class="mono">${r.forward_ms} ms</span>` : ""}
+    </div>
+    <div class="meta">
+      <div><div class="k">Remote IP</div><div class="v"><button class="linkish" data-ip="${esc(r.remote_ip)}">${esc(r.remote_ip || "—")}</button></div></div>
+      <div><div class="k">Content-Type</div><div class="v" title="${esc(ct)}">${esc(ct || "—")}</div></div>
+      <div><div class="k">User-Agent</div><div class="v" title="${esc(headerGet(r.headers, "user-agent"))}">${esc(headerGet(r.headers, "user-agent") || "—")}</div></div>
+    </div>
+    <div class="subtabs">
+      <button class="tb ${state.dTab === "body" ? "on" : ""}" data-dtab="body">Body</button>
+      <button class="tb ${state.dTab === "headers" ? "on" : ""}" data-dtab="headers">Headers <span class="count">${headers.length}</span></button>
+      <button class="tb ${state.dTab === "query" ? "on" : ""}" data-dtab="query">Query <span class="count">${qp.length}</span></button>
+      <button class="tb ${state.dTab === "curl" ? "on" : ""}" data-dtab="curl">cURL</button>
+      <span class="sp"></span>
+      ${state.dTab === "body" ? `<div class="seg">${["pretty", "raw", "hex"].map(v => `<button class="${state.bodyView === v ? "on" : ""}" data-bview="${v}">${v}</button>`).join("")}</div>` : ""}
+      ${state.dTab === "headers" ? `<input class="in" id="hq" placeholder="Filter headers" value="${esc(state.headerQ)}" style="height:28px;width:170px">` : ""}
+    </div>
+    ${state.dTab === "body" ? `<pre class="code ${state.bodyView === "raw" ? "wrap" : ""}">${bodyHTML(bytes, ct)}</pre>` : ""}
+    ${state.dTab === "headers" ? `<div class="hwrap"><table class="h"><tbody>${hRows || `<tr><td colspan="2" class="faint">No headers match</td></tr>`}</tbody></table></div>` : ""}
+    ${state.dTab === "query" ? (qp.length ? `<div class="hwrap"><table class="h"><tbody>${qp.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="faint">No query string.</div>`) : ""}
+    ${state.dTab === "curl" ? `<pre class="code">${esc(curlFor(r, bytes))}</pre><p class="faint" style="font-size:12px">Sends the request to your catcher again (it'll be captured as a new row). Use Replay to send it straight to your app.</p>` : ""}
+  `;
+  $("#dBody")._r = r; $("#dBody")._bytes = bytes;
+  const hqEl = $("#hq");
+  if (hqEl) hqEl.addEventListener("input", e => { state.headerQ = e.target.value; const p = e.target.selectionStart; paintDetail(r, bytes); const n = $("#hq"); n.focus(); n.setSelectionRange(p, p); });
+}
+
+/* ---------------- actions ---------------- */
+async function replay(ids) {
+  const target = ($("#dTarget")?.value || state.target).trim();
+  if (!target) { toast("Set a replay target first", "err"); return; }
+  if (target !== state.target) { state.target = target; store.set("target", target); $("#defTarget").value = target; }
+  let ok = 0, bad = 0;
+  for (const id of ids) {
+    try {
+      const res = await api(`/requests/${id}/replay`, { method: "POST", body: { target } });
+      const good = res.status >= 200 && res.status < 300;
+      good ? ok++ : bad++;
+      const r = state.byId.get(id);
+      if (r) { r.forward_status = res.status || 0; r.forward_error = res.error || ""; r.forward_ms = res.ms || 0; r._hay = null; }
+      const d = state.detail.get(id); if (d) Object.assign(d, { forward_status: res.status || 0, forward_error: res.error || "", forward_ms: res.ms || 0 });
+      if (ids.length === 1) toast(good ? `#${id} replayed → ${res.status} in ${res.ms} ms` : `#${id} replay → ${res.status || res.error}`, good ? "ok" : "err");
+    } catch (e) { bad++; if (ids.length === 1) toast(`#${id} replay failed: ${e.message}`, "err"); }
+  }
+  if (ids.length > 1) toast(`Replayed ${ids.length}: ${ok} ok, ${bad} failed`, bad ? "err" : "ok");
+  render();
+  if (state.activeId && ids.includes(state.activeId)) { const d = state.detail.get(state.activeId) || state.byId.get(state.activeId); paintDetail(d, $("#dBody")._bytes); }
+}
+async function deleteIds(ids, what) {
+  if (!ids.length) { toast("Nothing to delete"); return; }
+  if (!await confirmBox(`Delete ${what || ids.length + " request" + (ids.length === 1 ? "" : "s")}?`, "They'll be removed from the SQLite file. This can't be undone.")) return;
+  try {
+    const res = await api("/requests/delete", { method: "POST", body: { ids } });
+    ids.forEach(id => { state.selected.delete(id); state.detail.delete(id); });
+    if (ids.includes(state.activeId)) closeDetail();
+    toast(`Deleted ${res?.deleted ?? ids.length}`, "ok");
+    await load();
+  } catch (e) { toast("Delete failed: " + e.message, "err"); }
+}
+async function exportIds(ids) {
+  const out = [];
+  for (const id of ids) {
+    let d = state.detail.get(id);
+    if (!d) { try { d = await api("/requests/" + id); state.detail.set(id, d); } catch { d = state.byId.get(id); } }
+    const { _hay, ...clean } = d; out.push(clean);
+  }
+  download(`hooktape-${ids.length}-requests.json`, JSON.stringify(out, null, 2));
+}
+function setIpInclude(ip) {
+  state.ipInclude = ip; state.page = 0; switchTab("requests"); render();
+}
+function hideIp(ip, on) {
+  on ? state.ipExclude.add(ip) : state.ipExclude.delete(ip);
+  store.set("hiddenIps", [...state.ipExclude]); render();
+}
+function setTheme(t) {
+  const root = document.documentElement;
+  if (t === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", t);
+  store.set("theme", t);
+  $("#themeBtn").innerHTML = icon(t === "dark" ? "moon" : t === "light" ? "sun" : "auto");
+  $("#themeBtn").title = `Theme: ${t} (t to cycle)`;
+}
+function cycleTheme() { const order = ["auto", "light", "dark"]; setTheme(order[(order.indexOf(store.get("theme", "auto")) + 1) % 3]); }
+function switchTab(name) {
+  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  $$("[data-panel]").forEach(p => p.classList.toggle("hidden", p.dataset.panel !== name));
+}
+function clearFilters() {
+  state.q = ""; $("#q").value = ""; state.methods.clear(); state.fStatus = ""; $("#fStatus").value = "";
+  state.fEndpoint = ""; state.fRange = 0; $("#fRange").value = ""; state.ipInclude = null; state.page = 0; render(); renderMethodSeg();
+}
+function renderMethodSeg() {
+  $("#methodSeg").innerHTML = METHODS.map(m => `<button data-method="${m}" class="${state.methods.has(m) ? "on" : ""}">${m === "DELETE" ? "DEL" : m}</button>`).join("");
+}
+
+/* ---------------- events ---------------- */
+let qTimer;
+$("#q").addEventListener("input", e => { clearTimeout(qTimer); qTimer = setTimeout(() => { state.q = e.target.value.trim(); state.page = 0; render(); }, 120); });
+$("#methodSeg").addEventListener("click", e => {
+  const b = e.target.closest("[data-method]"); if (!b) return;
+  const m = b.dataset.method; state.methods.has(m) ? state.methods.delete(m) : state.methods.add(m);
+  state.page = 0; renderMethodSeg(); render();
+});
+$("#fStatus").addEventListener("change", e => { state.fStatus = e.target.value; state.page = 0; render(); });
+$("#fEndpoint").addEventListener("change", e => { state.fEndpoint = e.target.value; state.page = 0; render(); });
+$("#fRange").addEventListener("change", e => { state.fRange = +e.target.value; state.page = 0; render(); });
+$("#clearFilters").addEventListener("click", clearFilters);
+$("#pageSize").addEventListener("change", e => { state.pageSize = +e.target.value; state.page = 0; render(); });
+$("#prev").addEventListener("click", () => { state.page--; renderRequests(state.filtered); });
+$("#next").addEventListener("click", () => { state.page++; renderRequests(state.filtered); });
+$$("th[data-sort]").forEach(th => th.addEventListener("click", () => {
+  const k = th.dataset.sort; state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : -1 }; render();
+}));
+$("#checkAll").addEventListener("change", e => {
+  const ids = state.filtered.slice(state.page * state.pageSize, state.page * state.pageSize + state.pageSize).map(r => r.id);
+  ids.forEach(id => e.target.checked ? state.selected.add(id) : state.selected.delete(id)); renderRequests(state.filtered);
+});
+let lastChecked = null;
+$("#rows").addEventListener("click", e => {
+  const ipb = e.target.closest("[data-ip]"); if (ipb) { e.stopPropagation(); setIpInclude(ipb.dataset.ip); return; }
+  const cb = e.target.closest("[data-check]");
+  if (cb) {
+    const id = +cb.dataset.check;
+    if (e.shiftKey && lastChecked != null) {
+      const ids = state.filtered.map(r => r.id), a = ids.indexOf(lastChecked), b = ids.indexOf(id);
+      ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(x => cb.checked ? state.selected.add(x) : state.selected.delete(x));
+    } else cb.checked ? state.selected.add(id) : state.selected.delete(id);
+    lastChecked = id; renderRequests(state.filtered); return;
+  }
+  const tr = e.target.closest("tr[data-id]"); if (tr) openDetail(+tr.dataset.id);
+});
+$("#reqEmpty").addEventListener("click", e => { if (e.target.closest("[data-action=clear]")) clearFilters(); });
+$("#chips").addEventListener("click", e => {
+  const u = e.target.closest("[data-unchip]");
+  if (u) { const k = u.dataset.unchip; if (k === "hideLocal") { state.hideLocal = false; store.set("hideLocal", false); $("#optLocal").checked = false; } else state[k] = null; render(); }
+  const h = e.target.closest("[data-unhide]"); if (h) hideIp(h.dataset.unhide, false);
+});
+$("#stats").addEventListener("click", e => {
+  const s = e.target.closest("[data-stat]"); if (!s) return;
+  if (s.dataset.stat === "ips") { switchTab("ips"); return; }
+  state.fStatus = s.dataset.stat; $("#fStatus").value = s.dataset.stat; state.page = 0; switchTab("requests"); render();
+});
+$("#bulkReplay").addEventListener("click", () => replay([...state.selected].sort((a, b) => a - b)));
+$("#bulkDelete").addEventListener("click", () => deleteIds([...state.selected]));
+$("#bulkExport").addEventListener("click", () => exportIds([...state.selected].sort((a, b) => a - b)));
+$("#bulkClear").addEventListener("click", () => { state.selected.clear(); renderRequests(state.filtered); });
+$("#selectAllMatching").addEventListener("click", () => { state.filtered.forEach(r => state.selected.add(r.id)); renderRequests(state.filtered); });
+
+$$(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+["ipq", "ipKind", "ipSort"].forEach(id => $("#" + id).addEventListener("input", renderIPs));
+$("#ipRows").addEventListener("click", async e => {
+  const b = e.target.closest("[data-ipact]");
+  if (!b) { const tr = e.target.closest("[data-iprow]"); if (tr) setIpInclude(tr.dataset.iprow); return; }
+  e.stopPropagation(); const ip = b.dataset.v;
+  if (b.dataset.ipact === "show") setIpInclude(ip);
+  if (b.dataset.ipact === "hide") { hideIp(ip, true); toast(`Hiding ${ip} from the request list`); }
+  if (b.dataset.ipact === "unhide") hideIp(ip, false);
+  if (b.dataset.ipact === "copy") copy(ip, "IP copied");
+  if (b.dataset.ipact === "delete") { const ids = state.all.filter(r => r.remote_ip === ip).map(r => r.id); deleteIds(ids, `${ids.length} requests from ${ip}`); }
+});
+$("#ipExport").addEventListener("click", () => {
+  const rows = ipAggregate().sort((a, b) => b.count - a.count);
+  const csv = ["ip,requests,failures,endpoints,methods,first_seen,last_seen,body_bytes"].concat(rows.map(a =>
+    [a.ip, a.count, a.fail, [...a.eps].join(" "), [...a.methods].join(" "), new Date(a.first).toISOString(), new Date(a.last).toISOString(), a.bytes].join(","))).join("\n");
+  download("hooktape-ips.csv", csv, "text/csv");
+});
+$("#epGrid").addEventListener("click", e => {
+  const b = e.target.closest("[data-epact]"); if (!b) return; const v = b.dataset.v;
+  if (b.dataset.epact === "show") { state.fEndpoint = v; state.page = 0; switchTab("requests"); render(); }
+  if (b.dataset.epact === "copy") copy(v, "Endpoint URL copied");
+  if (b.dataset.epact === "delete") { const ids = state.all.filter(r => r.endpoint === v).map(r => r.id); deleteIds(ids, `all ${ids.length} requests on “${v}”`); }
+});
+
+$("#saveTarget").addEventListener("click", () => { state.target = $("#defTarget").value.trim(); store.set("target", state.target); toast("Replay target saved", "ok"); });
+$("#optBlur").checked = state.blur;
+$("#optBlur").addEventListener("change", e => { state.blur = e.target.checked; store.set("blur", state.blur); if (state.activeId) paintDetail($("#dBody")._r, $("#dBody")._bytes); });
+$("#optLocal").checked = state.hideLocal;
+$("#optLocal").addEventListener("change", e => { state.hideLocal = e.target.checked; store.set("hideLocal", state.hideLocal); render(); });
+$("#deleteOlder").addEventListener("click", async () => {
+  const ms = +$("#olderThan").value, label = $("#olderThan").selectedOptions[0].text;
+  const n = state.all.filter(r => r.created_at < Date.now() - ms).length;
+  if (!await confirmBox(`Delete requests older than ${label}?`, `${n} request${n === 1 ? "" : "s"} will be removed from the SQLite file.`)) return;
+  try { const r = await api("/requests/delete", { method: "POST", body: { older_than_ms: Date.now() - ms } }); toast(`Deleted ${r?.deleted ?? n}`, "ok"); load(); }
+  catch (e) { toast("Delete failed: " + e.message, "err"); }
+});
+$("#deleteFiltered").addEventListener("click", () => deleteIds(state.filtered.map(r => r.id), `${state.filtered.length} matching requests`));
+$("#deleteAll").addEventListener("click", async () => {
+  if (!await confirmBox("Delete every request?", `All ${state.all.length} captured requests will be removed.`, "Delete all")) return;
+  try { await api("/requests/delete", { method: "POST", body: { all: true } }); closeDetail(); state.selected.clear(); toast("Deleted all", "ok"); load(); }
+  catch (e) { toast("Delete failed: " + e.message, "err"); }
+});
+
+$("#dClose").addEventListener("click", closeDetail);
+$("#scrim").addEventListener("click", closeDetail);
+$("#dPrev").addEventListener("click", () => stepDetail(-1));
+$("#dNext").addEventListener("click", () => stepDetail(1));
+$("#dBody").addEventListener("click", e => {
+  const r = $("#dBody")._r, bytes = $("#dBody")._bytes;
+  const ipb = e.target.closest("[data-ip]"); if (ipb) { closeDetail(); setIpInclude(ipb.dataset.ip); return; }
+  const t = e.target.closest("[data-dtab]"); if (t) { state.dTab = t.dataset.dtab; paintDetail(r, bytes); return; }
+  const v = e.target.closest("[data-bview]"); if (v) { state.bodyView = v.dataset.bview; paintDetail(r, bytes); return; }
+  const a = e.target.closest("[data-d]"); if (!a) return;
+  ({
+    replay: () => replay([r.id]),
+    curl: () => copy(curlFor(r, bytes), "cURL copied"),
+    dl: () => { const blob = new Blob([bytes]); const l = document.createElement("a"); l.href = URL.createObjectURL(blob); l.download = `hooktape-${r.id}.body`; l.click(); },
+    json: () => { const { _hay, ...c } = r; copy(JSON.stringify(c, null, 2), "Request JSON copied"); },
+    select: () => { state.selected.has(r.id) ? state.selected.delete(r.id) : state.selected.add(r.id); renderRequests(state.filtered); paintDetail(r, bytes); },
+    delete: () => deleteIds([r.id], `#${r.id}`)
+  })[a.dataset.d]?.();
+});
+
+$("#liveBtn").addEventListener("click", () => setLive(!state.live));
+$("#refreshBtn").addEventListener("click", () => { load(); toast("Refreshed"); });
+$("#themeBtn").addEventListener("click", cycleTheme);
+$("#helpBtn").addEventListener("click", () => $("#help").showModal());
+$$("[data-copy-el]").forEach(b => b.addEventListener("click", () => copy($("#" + b.dataset.copyEl).textContent)));
+
+document.addEventListener("keydown", e => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if (e.key === "Escape") {
+    if ($("#drawer").classList.contains("open")) closeDetail();
+    else if (typing) { document.activeElement.blur(); if (state.q) { $("#q").value = ""; state.q = ""; render(); } }
+    return;
+  }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || $("dialog[open]")) return;
+  const k = e.key;
+  if (k === "/") { e.preventDefault(); switchTab("requests"); $("#q").focus(); }
+  else if (k === "j") stepDetail(1);
+  else if (k === "k") stepDetail(-1);
+  else if (k === "Enter" && !state.activeId && state.filtered.length) openDetail(state.filtered[0].id);
+  else if (k === "r") load();
+  else if (k === "l") setLive(!state.live);
+  else if (k === "t") cycleTheme();
+  else if (k === "?") $("#help").showModal();
+  else if (state.activeId && k === "p") replay([state.activeId]);
+  else if (state.activeId && k === "x") { const id = state.activeId; state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id); renderRequests(state.filtered); paintDetail(state.detail.get(id) || state.byId.get(id), $("#dBody")._bytes); }
+  else if (state.activeId && (k === "Delete" || k === "Backspace")) deleteIds([state.activeId], `#${state.activeId}`);
+});
+setInterval(() => { if (!document.hidden && $("[data-panel=ips]:not(.hidden)")) renderIPs(); }, 30000);
+
+/* ============================================================
+   Demo data — used only when /api isn't reachable (e.g. opening
+   this file directly). Safe to delete once the API exists.
+   ============================================================ */
+const Demo = (() => {
+  const enc = new TextEncoder();
+  let rows = [], nextId = 1;
+  const rnd = a => a[Math.floor(Math.random() * a.length)];
+  const hex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, "0")).join("");
+  const SOURCES = [
+    { ep: "stripe-dev", ips: ["54.187.174.169", "54.187.205.235", "3.18.12.63", "3.130.192.231"], ua: "Stripe/1.0 (+https://stripe.com/docs/webhooks)",
+      make() {
+        const type = rnd(["charge.succeeded", "payment_intent.succeeded", "customer.subscription.updated", "invoice.paid", "checkout.session.completed", "charge.refunded"]);
+        const body = { id: "evt_" + hex(12), object: "event", api_version: "2024-06-20", created: Math.floor(Date.now() / 1000), type, livemode: false,
+          data: { object: { id: "pi_" + hex(12), object: type.split(".")[0], amount: rnd([1999, 4900, 12000, 500]), currency: "usd", customer: "cus_" + hex(7), status: "succeeded", metadata: { order_id: String(1000 + Math.floor(Math.random() * 9000)) } } } };
+        return { path: "/webhook", headers: { "Stripe-Signature": [`t=${Math.floor(Date.now() / 1000)},v1=${hex(32)}`] }, body: JSON.stringify(body) };
+      } },
+    { ep: "github", ips: ["140.82.115.44", "140.82.115.112", "192.30.252.40"], ua: "GitHub-Hookshot/7a1e2c4",
+      make() {
+        const ev = rnd(["push", "pull_request", "issues", "workflow_run", "ping"]);
+        const body = { action: ev === "push" ? undefined : rnd(["opened", "closed", "synchronize", "completed"]), ref: "refs/heads/main",
+          repository: { id: 81234567, full_name: "acme/api", private: true }, sender: { login: "octo-dev", type: "User" }, after: hex(20) };
+        return { path: "/events", headers: { "X-GitHub-Event": [ev], "X-GitHub-Delivery": [crypto.randomUUID()], "X-Hub-Signature-256": ["sha256=" + hex(32)] }, body: JSON.stringify(body) };
+      } },
+    { ep: "shopify", ips: ["23.227.38.32", "23.227.38.65"], ua: "Shopify-Captain-Hook",
+      make() {
+        const topic = rnd(["orders/create", "orders/paid", "products/update", "customers/create"]);
+        const body = { id: 4500000000000 + Math.floor(Math.random() * 1e6), email: "buyer@example.com", total_price: rnd(["29.00", "118.50", "7.99"]), currency: "USD",
+          line_items: [{ title: "Hoodie", quantity: 1, price: "49.00" }], financial_status: "paid" };
+        return { path: "/" + topic.replace("/", "-"), headers: { "X-Shopify-Topic": [topic], "X-Shopify-Hmac-Sha256": [btoa(hex(16))], "X-Shopify-Shop-Domain": ["acme-dev.myshopify.com"] }, body: JSON.stringify(body) };
+      } },
+    { ep: "twilio", ips: ["54.172.60.0", "54.244.51.3"], ua: "TwilioProxy/1.1",
+      make() {
+        const p = new URLSearchParams({ MessageSid: "SM" + hex(16), From: "+15550001111", To: "+15552223333", Body: rnd(["Hi!", "STOP", "Order status?"]), NumMedia: "0" });
+        return { path: "/sms", ct: "application/x-www-form-urlencoded", headers: { "X-Twilio-Signature": [btoa(hex(20))] }, body: p.toString() };
+      } },
+    { ep: "demo", ips: ["127.0.0.1", "::1", "192.168.1.24"], ua: "curl/8.7.1",
+      make() {
+        const kind = rnd(["json", "json", "bin", "gzip", "empty"]);
+        if (kind === "bin") return { path: "/upload", ct: "application/octet-stream", headers: {}, bytes: crypto.getRandomValues(new Uint8Array(96)) };
+        if (kind === "gzip") { const b = crypto.getRandomValues(new Uint8Array(70)); b[0] = 0x1f; b[1] = 0x8b; b[2] = 8; return { path: "/stripe", headers: { "Content-Encoding": ["gzip"] }, bytes: b }; }
+        if (kind === "empty") return { path: "/", method: "GET", ct: "", headers: {}, body: "" };
+        return { path: "/stripe", query: Math.random() < .5 ? "x=1&debug=true" : "", headers: {}, body: JSON.stringify({ type: "charge.succeeded", hello: "world", n: 42, ok: true, extra: null }) };
+      } }
+  ];
+  function make(at) {
+    const s = rnd(SOURCES), d = s.make();
+    const bytes = d.bytes || enc.encode(d.body);
+    const method = d.method || (Math.random() < .06 ? rnd(["PUT", "PATCH", "DELETE"]) : "POST");
+    const ip = rnd(s.ips);
+    const roll = Math.random();
+    let fs = 200, fe = "", ms = 5 + Math.floor(Math.random() * 80);
+    if (roll < .10) { fs = 500; ms += 30; } else if (roll < .15) { fs = 400; } else if (roll < .19) { fs = 0; fe = "dial tcp 127.0.0.1:3000: connect: connection refused"; ms = 1; }
+    else if (roll < .21) { fs = 0; fe = "Post \"http://localhost:3000" + d.path + "\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"; ms = 10000; }
+    else if (roll < .25) { fs = 0; ms = 0; } else if (roll < .27) fs = 302;
+    const headers = { "Host": [ip.startsWith("127") || ip === "::1" ? "127.0.0.1:8080" : "brave-otter.trycloudflare.com"], "User-Agent": [s.ua],
+      "Accept": ["*/*"], ...(d.ct === "" ? {} : { "Content-Type": [d.ct || "application/json; charset=utf-8"] }), ...d.headers };
+    if (!isLocalIP(ip)) Object.assign(headers, { "Cf-Connecting-Ip": [ip], "Cf-Ray": [hex(8) + "-BOM"], "X-Forwarded-Proto": ["https"] });
+    return { id: nextId++, endpoint: s.ep, method, path: d.path, query: d.query || "", headers, _bytes: bytes, remote_ip: ip, created_at: at,
+      forward_status: fs, forward_error: fe, forward_ms: fs || fe ? ms : 0 };
+  }
+  const pub = r => { const { _bytes, ...rest } = r; return { ...rest, body_size: _bytes.length }; };
+  return {
+    init() {
+      const now = Date.now(), times = [];
+      for (let i = 0; i < 160; i++) times.push(now - Math.pow(Math.random(), 2.2) * 3 * 86400000);
+      times.sort((a, b) => a - b).forEach(t => rows.push(make(Math.round(t))));
+      setInterval(() => { if (Math.random() < .5) rows.push(make(Date.now())); }, 5000);
+    },
+    async handle(path, opts = {}) {
+      await new Promise(r => setTimeout(r, 60));
+      const method = opts.method || "GET", body = opts.body || {};
+      if (path === "/status") return { version: "v0.1.0 (demo)", db: "./hooktape.db", catcher: "http://127.0.0.1:8080", public: "https://brave-otter.trycloudflare.com",
+        forward: "http://localhost:3000", endpoint_hint: "stripe-dev", started_at: Date.now() - 2 * 3600000 - 1234, retention: "7d" };
+      if (path.startsWith("/requests?")) return rows.slice().reverse().map(pub);
+      if (path === "/requests/delete" && method === "POST") {
+        const before = rows.length;
+        if (body.all) rows = [];
+        else if (body.older_than_ms) rows = rows.filter(r => r.created_at >= body.older_than_ms);
+        else if (body.ids) { const s = new Set(body.ids); rows = rows.filter(r => !s.has(r.id)); }
+        return { deleted: before - rows.length };
+      }
+      let m = path.match(/^\/requests\/(\d+)\/replay$/);
+      if (m && method === "POST") {
+        const r = rows.find(x => x.id === +m[1]); if (!r) throw new Error(`no request with id ${m[1]}`);
+        await new Promise(res => setTimeout(res, 150));
+        const ok = Math.random() < .8;
+        Object.assign(r, ok ? { forward_status: 200, forward_error: "", forward_ms: 8 + Math.floor(Math.random() * 40) } : { forward_status: 500, forward_error: "", forward_ms: 41 });
+        return { status: r.forward_status, ms: r.forward_ms, error: r.forward_error };
+      }
+      m = path.match(/^\/requests\/(\d+)$/);
+      if (m) { const r = rows.find(x => x.id === +m[1]); if (!r) throw new Error(`no request with id ${m[1]}`); return { ...pub(r), body: bytesToB64(r._bytes) }; }
+      throw new Error("not found");
+    }
+  };
+})();
+
+setTheme(store.get("theme", "auto"));
+renderMethodSeg();
+boot();
+</script>
+</body>
+</html>

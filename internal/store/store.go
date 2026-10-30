@@ -204,3 +204,31 @@ type ListOptions struct {
 }
 
 var ErrNotFound = errors.New("request not found")
+
+func (s *Store) DeleteByIDs(ctx context.Context, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM requests WHERE id IN (?`+strings.Repeat(",?", len(ids)-1)+`)`, args...)
+	if err != nil {
+		return 0, s.wrap(err)
+	}
+
+	return res.RowsAffected()
+}
+
+func (s *Store) DeleteAll(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM requests`)
+	if err != nil {
+		return 0, s.wrap(err)
+	}
+
+	return res.RowsAffected()
+}

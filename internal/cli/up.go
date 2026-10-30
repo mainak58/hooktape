@@ -24,6 +24,7 @@ import (
 	"github.com/mainak58/hooktape/internal/render"
 	"github.com/mainak58/hooktape/internal/store"
 	"github.com/mainak58/hooktape/internal/tunnel"
+	"github.com/mainak58/hooktape/internal/web"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +43,8 @@ var (
 	upTunnelName string
 	upRetention  string
 	upEndpoint   string
+	upUIPort     int
+	upNoUI       bool
 )
 
 var upCmd = &cobra.Command{
@@ -64,10 +67,14 @@ func init() {
 	flags.StringVar(&upTunnelName, "tunnel-name", "", "name for the public tunnel")
 	flags.StringVar(&upRetention, "retention", "0", "delete requests older than this (e.g. 7d; 0 keeps everything)")
 	flags.StringVar(&upEndpoint, "endpoint", "demo", "endpoint name to show in the paste hint")
+	flags.IntVar(&upUIPort, "ui-port", 8081, "port for the dashboard")
+	flags.BoolVar(&upNoUI, "no-ui", false, "do not start the dashboard")
 	rootCmd.AddCommand(upCmd)
 }
 
 func runUp(cmd *cobra.Command, args []string) error {
+	started := time.Now()
+
 	maxBody, err := humanize.ParseBytes(upMaxBody)
 	if err != nil {
 		return fmt.Errorf("invalid --max-body %q", upMaxBody)
@@ -87,6 +94,16 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	cmd.SilenceUsage = true
+
+	var uiListener net.Listener
+	if !upNoUI {
+		uiListener, err = net.Listen("tcp", net.JoinHostPort(upAddr, strconv.Itoa(upUIPort)))
+		if err != nil {
+			listener.Close()
+			return uiListenError(err, upUIPort)
+		}
+		defer uiListener.Close()
+	}
 
 	s, err := store.Open(dbPath)
 	if err != nil {
@@ -119,6 +136,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	var ui *web.Handler
+	var uiSrv *http.Server
+	if uiListener != nil {
+		ui = &web.Handler{Store: s, Client: forward.NewClient(upTimeout), Logf: logf}
+		ui.SetStatus(uiStatus(started, localURL(listener.Addr()), ""))
+		uiSrv = &http.Server{
+			Handler:           ui.Routes(),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -126,10 +155,13 @@ func runUp(cmd *cobra.Command, args []string) error {
 		startRetention(ctx, s, retention, logf)
 	}
 
-	printBanner(cmd, colors, listener.Addr())
+	printBanner(cmd, colors, listener.Addr(), uiListener)
 
-	serveErr := make(chan error, 1)
+	serveErr := make(chan error, 2)
 	go func() { serveErr <- srv.Serve(listener) }()
+	if uiSrv != nil {
+		go func() { serveErr <- uiSrv.Serve(uiListener) }()
+	}
 
 	// The tunnel comes up after the server, so cloudflared's first probe of the
 	// local URL already has something to reach.
@@ -137,6 +169,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 	var tunnelErr <-chan error
 	if !upNoTunnel {
 		tun, tunnelErr = startTunnel(ctx, cmd, colors, logf, localURL(listener.Addr()))
+		if tun != nil {
+			ui.SetStatus(uiStatus(started, localURL(listener.Addr()), tun.PublicURL))
+		}
 	}
 
 	select {
@@ -169,12 +204,17 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logf("shutdown: %v", err)
 	}
+	if uiSrv != nil {
+		if err := uiSrv.Shutdown(shutdownCtx); err != nil {
+			logf("dashboard shutdown: %v", err)
+		}
+	}
 	fwd.stop(5 * time.Second)
 
 	return nil
 }
 
-func printBanner(cmd *cobra.Command, colors render.Palette, addr net.Addr) {
+func printBanner(cmd *cobra.Command, colors render.Palette, addr net.Addr, uiListener net.Listener) {
 	out := cmd.OutOrStdout()
 
 	target := upForward
@@ -186,6 +226,12 @@ func printBanner(cmd *cobra.Command, colors render.Palette, addr net.Addr) {
 	fmt.Fprintf(out, "  db        %s\n", dbPath)
 	fmt.Fprintf(out, "  catcher   http://%s/h/<endpoint>/...\n", addr.String())
 	fmt.Fprintf(out, "  forward   %s\n", target)
+
+	if uiListener != nil {
+		fmt.Fprintf(out, "  dashboard %s\n", localURL(uiListener.Addr()))
+	} else {
+		fmt.Fprintf(out, "  dashboard %s\n", colors.Dim("off (--no-ui)"))
+	}
 
 	if upNoTunnel {
 		fmt.Fprintf(out, "  public    %s\n", colors.Dim("off (--no-tunnel)"))
@@ -272,6 +318,34 @@ func pasteURL(base string) string {
 func listenError(err error, port int) error {
 	if errors.Is(err, syscall.EADDRINUSE) {
 		return fmt.Errorf("port %d is busy; try --port %d", port, port+1)
+	}
+
+	return err
+}
+
+// uiStatus is what the dashboard shows about this run. Only the public URL
+// changes after startup, once cloudflared reports one.
+func uiStatus(started time.Time, catcher, public string) web.Status {
+	retention := upRetention
+	if retention == "0" {
+		retention = ""
+	}
+
+	return web.Status{
+		Version:      version,
+		DB:           dbPath,
+		Catcher:      catcher,
+		Public:       public,
+		Forward:      upForward,
+		EndpointHint: upEndpoint,
+		StartedAt:    started.UnixMilli(),
+		Retention:    retention,
+	}
+}
+
+func uiListenError(err error, port int) error {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return fmt.Errorf("dashboard port %d is busy; try --ui-port %d or --no-ui", port, port+1)
 	}
 
 	return err
