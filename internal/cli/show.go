@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,6 +39,10 @@ func init() {
 }
 
 func runShow(cmd *cobra.Command, args []string) error {
+	// Past this point an error is about the request asked for, not how the
+	// command was typed.
+	cmd.SilenceUsage = true
+
 	id, err := strconv.ParseInt(args[0], 10, 64)
 	if err != nil {
 		return fmt.Errorf("invalid id %q", args[0])
@@ -51,7 +56,7 @@ func runShow(cmd *cobra.Command, args []string) error {
 
 	r, err := s.Get(cmd.Context(), id)
 	if err != nil {
-		return err
+		return unknownID(id, err)
 	}
 
 	out := cmd.OutOrStdout()
@@ -83,6 +88,14 @@ func runShow(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(out, forwardLine(colors, r))
 
 	return nil
+}
+
+func unknownID(id int64, err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("no request with id %d (see hooktape list)", id)
+	}
+
+	return err
 }
 
 func printHeaders(out io.Writer, colors render.Palette, headers map[string][]string) {

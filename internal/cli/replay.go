@@ -69,7 +69,7 @@ func runReplay(cmd *cobra.Command, args []string) error {
 	for _, id := range ids {
 		r, err := s.Get(cmd.Context(), id)
 		if err != nil {
-			return err
+			return unknownID(id, err)
 		}
 
 		res := forward.Send(cmd.Context(), client, r, target, forward.SendOptions{Replay: true})
@@ -79,7 +79,7 @@ func runReplay(cmd *cobra.Command, args []string) error {
 			errMsg = res.Err.Error()
 		}
 		if err := s.SetForwardResult(cmd.Context(), id, res.Status, res.Duration.Milliseconds(), errMsg); err != nil {
-			return err
+			return unknownID(id, err)
 		}
 
 		fmt.Fprintln(out, replayLine(colors, id, res))

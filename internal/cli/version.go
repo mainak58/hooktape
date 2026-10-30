@@ -13,9 +13,10 @@ var (
 )
 
 var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the hooktape version",
-	Args:  cobra.NoArgs,
+	Use:     "version",
+	Short:   "Print the hooktape version",
+	Example: "  hooktape version",
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(cmd.OutOrStdout(), "hooktape %s (%s)\n", version, commit)
 	},

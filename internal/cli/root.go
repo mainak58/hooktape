@@ -21,6 +21,14 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "hooktape",
 	Short: "Catch, store, and replay webhooks on your own machine",
+	Long: `hooktape catches webhooks on a local port, stores every request in SQLite,
+forwards them to your app, and replays any of them whenever you like.
+
+Start with "hooktape up"; everything else reads or resends what it caught.`,
+	Example: `  hooktape up --forward http://localhost:3000
+  hooktape list
+  hooktape show 12
+  hooktape replay 12`,
 }
 
 func init() {

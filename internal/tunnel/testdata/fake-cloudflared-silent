@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stands in for a cloudflared that starts but never reports a tunnel, so the
+# startup timeout has something to time out on.
+while true; do
+	sleep 1
+done

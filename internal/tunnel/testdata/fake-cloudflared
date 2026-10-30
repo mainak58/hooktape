@@ -1,0 +1,22 @@
+#!/bin/sh
+# Stands in for cloudflared in tests: prints what the real one prints to stderr,
+# then idles until it is signalled.
+named=""
+for arg in "$@"; do
+	if [ "$arg" = "run" ]; then named=1; fi
+done
+
+echo "INF fake cloudflared started with: $*" >&2
+
+if [ -n "$named" ]; then
+	echo "INF Registered tunnel connection connIndex=0 location=lhr01" >&2
+else
+	echo "INF +------------------------------------------------+" >&2
+	echo "INF |  https://brave-otter.trycloudflare.com         |" >&2
+	echo "INF +------------------------------------------------+" >&2
+	echo "INF Registered tunnel connection connIndex=0 location=bom09" >&2
+fi
+
+while true; do
+	sleep 1
+done

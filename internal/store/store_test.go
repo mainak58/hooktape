@@ -326,3 +326,36 @@ func TestDeleteOlderThan(t *testing.T) {
 		t.Errorf("kept = %v, want %v", kept, want)
 	}
 }
+
+func TestWrapLockError(t *testing.T) {
+	s := &Store{path: "./hooktape.db"}
+	locked := "another hooktape may be writing to ./hooktape.db; wait or use --db"
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, ""},
+		{"busy code", errors.New("SQLITE_BUSY (5): database is busy"), locked},
+		{"database locked", errors.New("database is locked (5) (SQLITE_BUSY)"), locked},
+		{"table locked", errors.New("database table is locked: requests"), locked},
+		{"not found passes through", ErrNotFound, ErrNotFound.Error()},
+		{"other passes through", errors.New("no such column: nope"), "no such column: nope"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.wrap(tt.err)
+			if tt.want == "" {
+				if got != nil {
+					t.Fatalf("wrap = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.Error() != tt.want {
+				t.Fatalf("wrap = %v, want %q", got, tt.want)
+			}
+		})
+	}
+}

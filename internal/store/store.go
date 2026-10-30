@@ -6,8 +6,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mainak58/hooktape/internal/model"
 	_ "modernc.org/sqlite"
@@ -17,7 +19,8 @@ import (
 var schema string
 
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string // kept only so lock errors can name the file in use
 }
 
 func Open(path string) (*Store, error) {
@@ -31,12 +34,28 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
+	s := &Store{db: db, path: path}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
-		return nil, err
+		return nil, s.wrap(err)
 	}
 
-	return &Store{db: db}, nil
+	return s, nil
+}
+
+func (s *Store) wrap(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	msg := err.Error()
+	if strings.Contains(msg, "SQLITE_BUSY") ||
+		strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") {
+		return fmt.Errorf("another hooktape may be writing to %s; wait or use --db", s.path)
+	}
+
+	return err
 }
 
 func (s *Store) Close() error {
@@ -59,7 +78,7 @@ func (s *Store) Insert(ctx context.Context, r *model.Request) (int64, error) {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.Endpoint, r.Method, r.Path, r.Query, string(headers), body, r.RemoteIP, r.CreatedAt)
 	if err != nil {
-		return 0, err
+		return 0, s.wrap(err)
 	}
 
 	id, err := res.LastInsertId()
@@ -105,7 +124,7 @@ func (s *Store) Get(ctx context.Context, id int64) (*model.Request, error) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, s.wrap(err)
 	}
 
 	return &r, nil
@@ -133,7 +152,7 @@ func (s *Store) List(ctx context.Context, opts ListOptions) ([]model.Request, er
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, s.wrap(err)
 	}
 	defer rows.Close()
 
@@ -146,7 +165,7 @@ func (s *Store) List(ctx context.Context, opts ListOptions) ([]model.Request, er
 		requests = append(requests, r)
 	}
 
-	return requests, rows.Err()
+	return requests, s.wrap(rows.Err())
 }
 
 func (s *Store) SetForwardResult(ctx context.Context, id int64, status int, ms int64, errMsg string) error {
@@ -155,7 +174,7 @@ func (s *Store) SetForwardResult(ctx context.Context, id int64, status int, ms i
 		WHERE id = ?`,
 		status, ms, errMsg, id)
 	if err != nil {
-		return err
+		return s.wrap(err)
 	}
 
 	updated, err := res.RowsAffected()
@@ -172,7 +191,7 @@ func (s *Store) SetForwardResult(ctx context.Context, id int64, status int, ms i
 func (s *Store) DeleteOlderThan(ctx context.Context, cutoffMs int64) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM requests WHERE created_at < ?`, cutoffMs)
 	if err != nil {
-		return 0, err
+		return 0, s.wrap(err)
 	}
 
 	return res.RowsAffected()

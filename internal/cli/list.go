@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -10,18 +14,20 @@ import (
 	"github.com/mainak58/hooktape/internal/render"
 	"github.com/mainak58/hooktape/internal/store"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
 	listLimit    int
 	listEndpoint string
 	listJSON     bool
+	listWatch    bool
 )
 
 var listCmd = &cobra.Command{
 	Use:     "list",
 	Short:   "List captured requests, newest first",
-	Example: "  hooktape list --limit 10 --endpoint stripe",
+	Example: "  hooktape list --limit 10 --endpoint stripe\n  hooktape list --watch",
 	Args:    cobra.NoArgs,
 	RunE:    runList,
 }
@@ -31,6 +37,8 @@ func init() {
 	flags.IntVar(&listLimit, "limit", 50, "maximum number of requests to show")
 	flags.StringVar(&listEndpoint, "endpoint", "", "only show requests for this endpoint")
 	flags.BoolVar(&listJSON, "json", false, "print a JSON array without bodies")
+	flags.BoolVar(&listWatch, "watch", false, "reprint the table every 2s until Ctrl+C")
+	listCmd.MarkFlagsMutuallyExclusive("json", "watch")
 	rootCmd.AddCommand(listCmd)
 }
 
@@ -41,7 +49,40 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 	defer s.Close()
 
-	requests, err := s.List(cmd.Context(), store.ListOptions{Limit: listLimit, Endpoint: listEndpoint})
+	if !listWatch {
+		return printList(cmd.Context(), cmd, s)
+	}
+
+	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	cmd.SilenceUsage = true
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for ctx.Err() == nil {
+		clearScreen(cmd)
+		if err := printList(ctx, cmd, s); err != nil && ctx.Err() == nil {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+		case <-ticker.C:
+		}
+	}
+
+	return nil
+}
+
+func clearScreen(cmd *cobra.Command) {
+	if file, ok := cmd.OutOrStdout().(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+		fmt.Fprint(file, "\033[H\033[2J")
+	}
+}
+
+func printList(ctx context.Context, cmd *cobra.Command, s *store.Store) error {
+	requests, err := s.List(ctx, store.ListOptions{Limit: listLimit, Endpoint: listEndpoint})
 	if err != nil {
 		return err
 	}

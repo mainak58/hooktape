@@ -1,18 +1,24 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/mainak58/hooktape/internal/model"
 	"github.com/mainak58/hooktape/internal/render"
 	"github.com/mainak58/hooktape/internal/store"
+	"github.com/spf13/cobra"
 )
 
 // logSink collects log lines from the worker goroutine.
@@ -129,3 +135,65 @@ func TestParseRetention(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalURL(t *testing.T) {
+	tests := []struct {
+		addr string
+		want string
+	}{
+		{"127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"0.0.0.0:8080", "http://127.0.0.1:8080"}, // cloudflared needs a real interface
+		{"[::]:8080", "http://127.0.0.1:8080"},    // same for the v6 wildcard
+		{"192.168.1.5:9000", "http://192.168.1.5:9000"},
+		{"[::1]:8080", "http://[::1]:8080"},
+	}
+
+	for _, tt := range tests {
+		if got := localURL(fakeAddr(tt.addr)); got != tt.want {
+			t.Errorf("localURL(%q) = %q, want %q", tt.addr, got, tt.want)
+		}
+	}
+}
+
+func TestListenError(t *testing.T) {
+	bind := func(err error) error {
+		return &net.OpError{Op: "listen", Net: "tcp", Err: &os.SyscallError{Syscall: "bind", Err: err}}
+	}
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"wrapped in use", bind(syscall.EADDRINUSE), "port 8080 is busy; try --port 8081"},
+		{"bare in use", syscall.EADDRINUSE, "port 8080 is busy; try --port 8081"},
+		{"permission denied", bind(syscall.EACCES), bind(syscall.EACCES).Error()},
+		{"other", errors.New("no such host"), "no such host"},
+	}
+
+	for _, tt := range tests {
+		if got := listenError(tt.err, 8080).Error(); got != tt.want {
+			t.Errorf("%s: listenError = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestBannerPasteHintWithoutTunnel(t *testing.T) {
+	upNoTunnel, upEndpoint = true, "stripe"
+	t.Cleanup(func() { upNoTunnel, upEndpoint = false, "demo" })
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	printBanner(cmd, render.Colors(false), fakeAddr("0.0.0.0:8080"))
+
+	if want := "  paste →   http://127.0.0.1:8080/h/stripe\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("missing %q in:\n%s", want, out.String())
+	}
+}
+
+type fakeAddr string
+
+func (a fakeAddr) Network() string { return "tcp" }
+func (a fakeAddr) String() string  { return string(a) }
