@@ -8,6 +8,7 @@ type Request struct {
 	Query         string              `json:"query"` // raw query without "?"
 	Headers       map[string][]string `json:"headers"`
 	Body          []byte              `json:"body"`
+	BodySize      int                 `json:"body_size"`
 	RemoteIP      string              `json:"remote_ip"`
 	CreatedAt     int64               `json:"created_at"`     // unix milliseconds
 	ForwardStatus int                 `json:"forward_status"` // 0 = not attempted
