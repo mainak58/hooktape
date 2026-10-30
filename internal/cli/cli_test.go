@@ -30,7 +30,7 @@ func run(t *testing.T, args ...string) (string, error) {
 		f.Changed = false
 	}
 	rootCmd.PersistentFlags().VisitAll(reset)
-	for _, c := range []*cobra.Command{listCmd, showCmd, replayCmd} {
+	for _, c := range []*cobra.Command{listCmd, showCmd, replayCmd, upCmd} {
 		c.Flags().VisitAll(reset)
 	}
 
