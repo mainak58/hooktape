@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"os"
 
 	"github.com/mainak58/hooktape/internal/render"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
+
+var errQuiet = errors.New("")
 
 var (
 	dbPath  string
@@ -33,7 +37,14 @@ func init() {
 }
 
 func Execute() error {
-	return rootCmd.Execute()
+	rootCmd.SilenceErrors = true
+
+	err := rootCmd.Execute()
+	if err != nil && !errors.Is(err, errQuiet) {
+		fmt.Fprintln(rootCmd.ErrOrStderr(), "Error:", err)
+	}
+
+	return err
 }
 
 // paletteFor turns colour off for --no-color, NO_COLOR, and output that is not

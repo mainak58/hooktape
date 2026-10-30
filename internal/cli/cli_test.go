@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mainak58/hooktape/internal/config"
 	"github.com/mainak58/hooktape/internal/model"
 	"github.com/mainak58/hooktape/internal/render"
 	"github.com/mainak58/hooktape/internal/store"
@@ -27,7 +30,7 @@ func run(t *testing.T, args ...string) (string, error) {
 		f.Changed = false
 	}
 	rootCmd.PersistentFlags().VisitAll(reset)
-	for _, c := range []*cobra.Command{listCmd, showCmd} {
+	for _, c := range []*cobra.Command{listCmd, showCmd, replayCmd} {
 		c.Flags().VisitAll(reset)
 	}
 
@@ -248,6 +251,194 @@ func TestShowErrors(t *testing.T) {
 	}
 	if _, err := run(t, "show", "1", "--db", path, "--raw", "--body-only"); err == nil {
 		t.Error("--raw with --body-only: want error")
+	}
+}
+
+// replayEnv clears the forward environment variable and points the config at a
+// temp dir, so a replay test neither reads nor writes the real user config.
+func replayEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOOKTAPE_FORWARD", "")
+
+	dir := t.TempDir()
+	old := config.Dir
+	config.Dir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { config.Dir = old })
+}
+
+// app answers every request with status and records the ids it was sent.
+func app(t *testing.T, status int, ids *[]string) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*ids = append(*ids, r.Header.Get("X-Hooktape-Id"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+func forwardStatus(t *testing.T, dbFile string, id int64) (int, string) {
+	t.Helper()
+
+	s, err := store.Open(dbFile)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	r, err := s.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Get %d: %v", id, err)
+	}
+
+	return r.ForwardStatus, r.ForwardError
+}
+
+func TestReplaySendsIdsInOrder(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	var sent []string
+	server := app(t, http.StatusOK, &sent)
+
+	out, err := run(t, "replay", "3", "1", "2", "--db", path, "--forward", server.URL)
+	if err != nil {
+		t.Fatalf("replay: %v\n%s", err, out)
+	}
+	if got := strings.Join(sent, ","); got != "3,1,2" {
+		t.Errorf("sent %q, want 3,1,2", got)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines:\n%s", len(lines), out)
+	}
+	for i, want := range []string{"✓ #3 replayed → 200 OK ", "✓ #1 replayed → 200 OK ", "✓ #2 replayed → 200 OK "} {
+		if !strings.HasPrefix(lines[i], want) {
+			t.Errorf("line %d = %q, want prefix %q", i, lines[i], want)
+		}
+	}
+
+	// #3 was a refused forward when it was seeded.
+	if status, errMsg := forwardStatus(t, path, 3); status != 200 || errMsg != "" {
+		t.Errorf("stored result for #3 = (%d, %q), want (200, \"\")", status, errMsg)
+	}
+}
+
+func TestReplayRemembersTarget(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	var sent []string
+	server := app(t, http.StatusOK, &sent)
+
+	if out, err := run(t, "replay", "1", "--db", path, "--forward", server.URL); err != nil {
+		t.Fatalf("replay: %v\n%s", err, out)
+	}
+
+	c, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if c.LastForward != server.URL {
+		t.Errorf("LastForward = %q, want %q", c.LastForward, server.URL)
+	}
+
+	// Second replay leaves --forward off and still reaches the same app.
+	out, err := run(t, "replay", "2", "--db", path, "-v")
+	if err != nil {
+		t.Fatalf("replay without --forward: %v\n%s", err, out)
+	}
+	if len(sent) != 2 {
+		t.Errorf("app got %d requests, want 2", len(sent))
+	}
+	if want := "{\n  \"ok\": true\n}"; !strings.Contains(out, want) {
+		t.Errorf("-v did not print the response body:\n%s", out)
+	}
+}
+
+func TestReplayNonOKFails(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	var sent []string
+	server := app(t, http.StatusInternalServerError, &sent)
+
+	out, err := run(t, "replay", "1", "--db", path, "--forward", server.URL)
+	if err == nil {
+		t.Error("a 500 reply: want an error so the exit status is 1")
+	}
+	if !strings.HasPrefix(out, "✗ #1 replayed → 500 ") {
+		t.Errorf("got %q", out)
+	}
+	if status, _ := forwardStatus(t, path, 1); status != 500 {
+		t.Errorf("stored status = %d, want 500", status)
+	}
+}
+
+func TestReplayUnreachableApp(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	var sent []string
+	server := app(t, http.StatusOK, &sent)
+	url := server.URL
+	server.Close()
+
+	out, err := run(t, "replay", "1", "--db", path, "--forward", url)
+	if err == nil {
+		t.Error("unreachable app: want an error")
+	}
+	if !strings.HasPrefix(out, "✗ #1 replay failed: ") {
+		t.Errorf("got %q", out)
+	}
+	if status, errMsg := forwardStatus(t, path, 1); status != 0 || errMsg == "" {
+		t.Errorf("stored result = (%d, %q), want (0, non-empty)", status, errMsg)
+	}
+}
+
+func TestReplayErrors(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	if _, err := run(t, "replay", "1", "--db", path); err == nil {
+		t.Error("no target: want an error")
+	}
+
+	var sent []string
+	server := app(t, http.StatusOK, &sent)
+
+	if _, err := run(t, "replay", "abc", "--db", path, "--forward", server.URL); err == nil {
+		t.Error("non-numeric id: want an error")
+	}
+	if _, err := run(t, "replay", "99", "--db", path, "--forward", server.URL); err == nil {
+		t.Error("unknown id: want an error")
+	}
+	if _, err := run(t, "replay", "--db", path, "--forward", server.URL); err == nil {
+		t.Error("no ids: want an error")
+	}
+	if len(sent) != 0 {
+		t.Errorf("app got %d requests, want none", len(sent))
+	}
+}
+
+func TestReplayTargetFromEnv(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	var sent []string
+	server := app(t, http.StatusOK, &sent)
+	t.Setenv("HOOKTAPE_FORWARD", server.URL)
+
+	if out, err := run(t, "replay", "1", "--db", path); err != nil {
+		t.Fatalf("replay: %v\n%s", err, out)
+	}
+	if len(sent) != 1 {
+		t.Errorf("app got %d requests, want 1", len(sent))
 	}
 }
 
