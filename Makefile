@@ -1,10 +1,10 @@
 # Usage:
-#   make build                  compile ./hooktap
+#   make build                  compile ./hooktape
 #   make test                   run all tests with the race detector
 #   make lint                   check formatting and run go vet
-#   make run ARGS="up --no-tunnel"   run from source, passing ARGS to hooktap
+#   make run ARGS="up --no-tunnel"   run from source, passing ARGS to hooktape
 
-# Values stamped into the binary; `hooktap version` prints them.
+# Values stamped into the binary; `hooktape version` prints them.
 # They fall back to dev/none when there is no tag or commit to read.
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -13,8 +13,8 @@ COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 MODULE  := $(shell go list -m 2>/dev/null)
 
 # -X overwrites a string variable at link time. These must match the
-# `version` and `commit` vars in cmd/version.go.
-LDFLAGS := -X $(MODULE)/cmd.version=$(VERSION) -X $(MODULE)/cmd.commit=$(COMMIT)
+# `version` and `commit` vars in internal/cli/version.go.
+LDFLAGS := -X $(MODULE)/internal/cli.version=$(VERSION) -X $(MODULE)/internal/cli.commit=$(COMMIT)
 
 # These targets are commands, not files. Without this line, a file or
 # directory named "test" would make `make test` say "up to date".
@@ -23,7 +23,7 @@ LDFLAGS := -X $(MODULE)/cmd.version=$(VERSION) -X $(MODULE)/cmd.commit=$(COMMIT)
 # CGO_ENABLED=0 is set here only: the plan requires pure Go builds,
 # but `go test -race` below needs cgo, so it can't be set globally.
 build:
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o hooktap .
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o hooktape ./cmd/hooktape
 
 test:
 	go test -race ./...
@@ -36,4 +36,4 @@ lint:
 	go vet ./...
 
 run:
-	go run . $(ARGS)
+	go run ./cmd/hooktape $(ARGS)

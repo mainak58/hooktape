@@ -1,4 +1,13 @@
-package hooktape
+package main
+
+import (
+	"os"
+
+	"github.com/mainak58/hooktape/internal/cli"
+)
 
 func main() {
+	if err := cli.Execute(); err != nil {
+		os.Exit(1)
+	}
 }
