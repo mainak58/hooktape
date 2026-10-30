@@ -3,7 +3,9 @@ package cli
 import (
 	"os"
 
+	"github.com/mainak58/hooktape/internal/render"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -32,4 +34,12 @@ func init() {
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+// paletteFor turns colour off for --no-color, NO_COLOR, and output that is not
+// a terminal, so colour codes never end up in a file or a pipe.
+func paletteFor(cmd *cobra.Command) render.Palette {
+	file, ok := cmd.OutOrStdout().(*os.File)
+	enabled := ok && !noColor && os.Getenv("NO_COLOR") == "" && term.IsTerminal(int(file.Fd()))
+	return render.Colors(enabled)
 }

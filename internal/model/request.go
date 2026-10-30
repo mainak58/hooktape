@@ -7,7 +7,7 @@ type Request struct {
 	Path          string              `json:"path"`  // path AFTER /h/{endpoint}, always starts with "/"
 	Query         string              `json:"query"` // raw query without "?"
 	Headers       map[string][]string `json:"headers"`
-	Body          []byte              `json:"body"`
+	Body          []byte              `json:"body,omitempty"`
 	BodySize      int                 `json:"body_size"`
 	RemoteIP      string              `json:"remote_ip"`
 	CreatedAt     int64               `json:"created_at"`     // unix milliseconds
