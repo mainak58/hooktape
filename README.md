@@ -28,36 +28,12 @@ hooktape list/show/replay ─┴─▶ read ./hooktape.db
 
 ## Install
 
-Download a ready-made binary. You don't need Go for this:
-
-```sh
-curl -L -o hooktape https://github.com/mainak58/hooktape/releases/latest/download/hooktape-linux-amd64
-chmod +x hooktape
-./hooktape --help
-```
-
-Swap the file name for your platform, or download it from the
-[latest release](https://github.com/mainak58/hooktape/releases/latest):
-
-| Platform | File |
-| --- | --- |
-| Linux x64 | `hooktape-linux-amd64` |
-| Linux ARM64 | `hooktape-linux-arm64` |
-| macOS Apple Silicon | `hooktape-darwin-arm64` |
-| macOS Intel | `hooktape-darwin-amd64` |
-| Windows x64 | `hooktape-windows-amd64.exe` |
-
-The macOS and Windows binaries are unsigned, so a browser download may show a
-security warning.
-
-Or install with Go:
-
 ```sh
 go install github.com/mainak58/hooktape/cmd/hooktape@latest
 ```
 
 Go 1.26 or newer (see `go.mod`). The build is pure Go (no cgo, no system
-libraries). The first install compiles SQLite, so it can take a few minutes.
+libraries).
 
 If `hooktape` isn't found after installing, add Go's bin directory to your
 `PATH`:
