@@ -1,5 +1,6 @@
 # Usage:
 #   make build                  compile ./hooktape
+#   make install                install hooktape into $$GOPATH/bin
 #   make test                   run all tests with the race detector
 #   make lint                   check formatting and run go vet
 #   make run ARGS="up --no-tunnel"   run from source, passing ARGS to hooktape
@@ -18,7 +19,7 @@ LDFLAGS := -X $(MODULE)/internal/cli.version=$(VERSION) -X $(MODULE)/internal/cl
 
 # These targets are commands, not files. Without this line, a file or
 # directory named "test" would make `make test` say "up to date".
-.PHONY: build test lint run
+.PHONY: build install test lint run
 
 # CGO_ENABLED=0 is set here only: the plan requires pure Go builds,
 # but `go test -race` below needs cgo, so it can't be set globally.
@@ -37,3 +38,7 @@ lint:
 
 run:
 	go run ./cmd/hooktape $(ARGS)
+
+# go install drops the binary in $GOPATH/bin, already on PATH.
+install:
+	CGO_ENABLED=0 go install -ldflags "$(LDFLAGS)" ./cmd/hooktape

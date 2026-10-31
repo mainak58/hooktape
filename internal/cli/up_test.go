@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,6 +41,7 @@ func (l *logSink) text() string {
 }
 
 func TestForwarderRecordsResultInOrder(t *testing.T) {
+	replayEnv(t)
 	path := seed(t)
 	s, err := store.Open(path)
 	if err != nil {
@@ -108,31 +110,89 @@ func TestForwarderDropsWhenQueueFull(t *testing.T) {
 	}
 }
 
-func TestParseRetention(t *testing.T) {
-	tests := []struct {
-		in      string
-		want    time.Duration
-		wantErr bool
-	}{
-		{"0", 0, false},
-		{"", 0, false},
-		{"7d", 7 * 24 * time.Hour, false},
-		{"1.5d", 36 * time.Hour, false},
-		{"90m", 90 * time.Minute, false},
-		{"24h", 24 * time.Hour, false},
-		{"7days", 0, true},
-		{"soon", 0, true},
-	}
+func TestForwardAfterStopDoesNotPanic(t *testing.T) {
+	var sink logSink
+	f := newForwarder(nil, "http://example.invalid", time.Second, render.Colors(false), sink.logf)
+	f.start()
+	f.stop(time.Second)
+	f.stop(time.Second)
 
-	for _, tt := range tests {
-		got, err := parseRetention(tt.in)
-		if (err != nil) != tt.wantErr {
-			t.Errorf("parseRetention(%q) error = %v, wantErr %v", tt.in, err, tt.wantErr)
-			continue
+	f.Forward(&model.Request{ID: 9})
+
+	if want := "#9 saved but not forwarded"; !strings.Contains(sink.text(), want) {
+		t.Errorf("got %q, want %q", sink.text(), want)
+	}
+}
+
+func TestStopNamesEveryUnsentRequest(t *testing.T) {
+	replayEnv(t)
+
+	release := make(chan struct{})
+	reached := make(chan struct{})
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(reached)
+		<-release
+	}))
+	defer app.Close()
+
+	path := seed(t)
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	var sink logSink
+	f := newForwarder(s, app.URL, 5*time.Second, render.Colors(false), sink.logf)
+	f.start()
+	f.Forward(&model.Request{ID: 1, Method: "POST"})
+	<-reached
+	f.Forward(&model.Request{ID: 2, Method: "POST"})
+	f.Forward(&model.Request{ID: 3, Method: "POST"})
+
+	f.stop(10 * time.Millisecond)
+	close(release)
+	<-f.done
+
+	got := sink.text()
+	for _, want := range []string{"gave up draining", " 1", " 2", " 3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
 		}
-		if got != tt.want {
-			t.Errorf("parseRetention(%q) = %v, want %v", tt.in, got, tt.want)
-		}
+	}
+}
+
+func TestUpRejectsBadValues(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"respond low", []string{"--respond", "99"}, "invalid --respond"},
+		{"respond high", []string{"--respond", "600"}, "invalid --respond"},
+		{"forward scheme", []string{"--forward", "localhost:3000"}, "--forward: invalid target"},
+		{"workers", []string{"--forward-workers", "0"}, "invalid --forward-workers"},
+		{"tunnel name", []string{"--tunnel-name=-x"}, "invalid --tunnel-name"},
+		{"same ports", []string{"--port", "18555", "--ui-port", "18555"}, "both 18555"},
+		{"same ports on different addresses", []string{"--addr", "0.0.0.0", "--port", "18555", "--ui-port", "18555"}, "both 18555"},
+		{"respond interim", []string{"--respond", "103"}, "invalid --respond"},
+		{"max body zero", []string{"--max-body", "0"}, "invalid --max-body"},
+		{"max body overflow", []string{"--max-body", "10EB"}, "invalid --max-body"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"up", "--no-tunnel", "--db", filepath.Join(t.TempDir(), "t.db")}, tt.args...)
+			_, err := run(t, args...)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRetentionIsGone(t *testing.T) {
+	_, err := run(t, "up", "--no-tunnel", "--retention", "7d")
+	if err == nil || !strings.Contains(err.Error(), "unknown flag") {
+		t.Errorf("err = %v, want unknown flag", err)
 	}
 }
 
@@ -179,8 +239,8 @@ func TestListenError(t *testing.T) {
 }
 
 func TestBannerPasteHintWithoutTunnel(t *testing.T) {
-	upNoTunnel, upEndpoint = true, "stripe"
-	t.Cleanup(func() { upNoTunnel, upEndpoint = false, "demo" })
+	upNoTunnel, upHint = true, "stripe"
+	t.Cleanup(func() { upNoTunnel, upHint = false, "demo" })
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
@@ -190,6 +250,23 @@ func TestBannerPasteHintWithoutTunnel(t *testing.T) {
 
 	if want := "  paste →   http://127.0.0.1:8080/h/stripe\n"; !strings.Contains(out.String(), want) {
 		t.Errorf("missing %q in:\n%s", want, out.String())
+	}
+}
+
+func TestBannerShowsConfiguredAddress(t *testing.T) {
+	upNoTunnel, upAddr = true, "0.0.0.0"
+	t.Cleanup(func() { upNoTunnel, upAddr = false, "127.0.0.1" })
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	printBanner(cmd, render.Colors(false), fakeAddr("[::]:8080"), nil)
+
+	for _, want := range []string{"http://0.0.0.0:8080/h/<endpoint>", "anyone on this network can reach the catcher"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
 	}
 }
 

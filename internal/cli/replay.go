@@ -11,13 +11,14 @@ import (
 	"github.com/mainak58/hooktape/internal/config"
 	"github.com/mainak58/hooktape/internal/forward"
 	"github.com/mainak58/hooktape/internal/render"
-	"github.com/mainak58/hooktape/internal/store"
 	"github.com/spf13/cobra"
 )
 
 var (
-	replayForward string
-	replayTimeout time.Duration
+	replayForward         string
+	replayTimeout         time.Duration
+	replayForwardPath     bool
+	replayKeepCredentials bool
 )
 
 var replayCmd = &cobra.Command{
@@ -32,6 +33,8 @@ func init() {
 	flags := replayCmd.Flags()
 	flags.StringVar(&replayForward, "forward", "", "base URL to send to (env HOOKTAPE_FORWARD, else the last one used)")
 	flags.DurationVar(&replayTimeout, "timeout", 10*time.Second, "timeout for each request")
+	flags.BoolVar(&replayForwardPath, "forward-path", false, "append the captured path to the target, as up --forward-path does")
+	flags.BoolVar(&replayKeepCredentials, "keep-credentials", false, "send Authorization and Cookie to a non-local target too")
 	rootCmd.AddCommand(replayCmd)
 }
 
@@ -53,41 +56,54 @@ func runReplay(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	s, err := store.Open(dbPath)
+	s, err := openExisting()
 	if err != nil {
 		return err
 	}
 	defer s.Close()
 
-	_ = config.Save(config.Config{LastForward: target})
-
 	out := cmd.OutOrStdout()
 	colors := paletteFor(cmd)
 	client := forward.NewClient(replayTimeout)
+	opts := forward.SendOptions{Replay: true, KeepPath: replayForwardPath, KeepCredentials: replayKeepCredentials}
 	allOK := true
+	saved := false
+
+	if !replayKeepCredentials && !forward.IsLocalTarget(target) {
+		fmt.Fprintln(out, colors.Dim("target is not local: Authorization and Cookie are dropped (--keep-credentials sends them)"))
+	}
 
 	for _, id := range ids {
 		r, err := s.Get(cmd.Context(), id)
 		if err != nil {
-			return unknownID(id, err)
+			fmt.Fprintln(out, colors.Red("✗ "+unknownID(id, err).Error()))
+			allOK = false
+			continue
 		}
 
-		res := forward.Send(cmd.Context(), client, r, target, forward.SendOptions{Replay: true})
+		res := forward.Send(cmd.Context(), client, r, target, opts)
+
+		// Remembered only now, so a typo cannot break every later bare replay.
+		if res.Status != 0 && !saved {
+			_ = config.Save(config.Config{LastForward: target})
+			saved = true
+		}
 
 		errMsg := ""
 		if res.Err != nil {
 			errMsg = res.Err.Error()
 		}
-		if err := s.SetForwardResult(cmd.Context(), id, res.Status, res.Duration.Milliseconds(), errMsg); err != nil {
-			return unknownID(id, err)
+		if err := s.SetReplayResult(cmd.Context(), id, res.Status, res.Duration.Milliseconds(), errMsg); err != nil {
+			fmt.Fprintln(out, colors.Red("✗ "+unknownID(id, err).Error()))
+			allOK = false
 		}
 
 		fmt.Fprintln(out, replayLine(colors, id, res))
 		if verbose && res.Err == nil {
-			fmt.Fprintln(out, render.PrettyBody(res.Body, ""))
+			fmt.Fprintln(out, render.PrettyBody(res.Body))
 		}
 
-		if res.Status < 200 || res.Status >= 300 {
+		if res.Err != nil || res.Status < 200 || res.Status >= 300 {
 			allOK = false
 		}
 	}
@@ -101,10 +117,10 @@ func runReplay(cmd *cobra.Command, args []string) error {
 
 func forwardTarget() (string, error) {
 	if replayForward != "" {
-		return replayForward, nil
+		return forward.CheckTarget(replayForward)
 	}
 	if url := os.Getenv("HOOKTAPE_FORWARD"); url != "" {
-		return url, nil
+		return forward.CheckTarget(url)
 	}
 
 	c, err := config.Load()
@@ -112,7 +128,7 @@ func forwardTarget() (string, error) {
 		return "", err
 	}
 	if c.LastForward != "" {
-		return c.LastForward, nil
+		return forward.CheckTarget(c.LastForward)
 	}
 
 	return "", errors.New("no target: pass --forward http://localhost:3000")

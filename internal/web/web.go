@@ -6,8 +6,9 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"mime"
+	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	_ "embed"
 
 	"github.com/mainak58/hooktape/internal/forward"
+	"github.com/mainak58/hooktape/internal/render"
 	"github.com/mainak58/hooktape/internal/store"
 )
 
@@ -34,13 +36,13 @@ type Status struct {
 	Forward      string `json:"forward"`
 	EndpointHint string `json:"endpoint_hint"`
 	StartedAt    int64  `json:"started_at"` // unix milliseconds
-	Retention    string `json:"retention"`  // "" = keep forever
 }
 
 type Handler struct {
-	Store  *store.Store
-	Client *http.Client // used for replays from the page
-	Logf   func(format string, args ...any)
+	Store    *store.Store
+	Client   *http.Client // used for replays from the page
+	KeepPath bool         // send the captured path too, as --forward-path does
+	Logf     func(format string, args ...any)
 
 	status atomic.Pointer[Status]
 }
@@ -63,7 +65,29 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/requests/{id}", h.getRequest)
 	mux.HandleFunc("POST /api/requests/{id}/replay", h.replayRequest)
 	mux.HandleFunc("POST /api/requests/delete", h.deleteRequests)
-	return mux
+
+	// The API has no auth, so what keeps other sites out is that a browser
+	// labels their requests: CrossOriginProtection refuses cross-site writes,
+	// and localHostOnly refuses a rebound hostname, which a browser counts as
+	// same-origin and would let read every stored secret.
+	return localHostOnly(http.NewCrossOriginProtection().Handler(mux))
+}
+
+func localHostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		host = strings.Trim(host, "[]")
+
+		if !strings.EqualFold(host, "localhost") && net.ParseIP(host) == nil {
+			http.Error(w, "the dashboard answers to localhost or an IP address only", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +153,7 @@ func (h *Handler) replayRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, err := checkTarget(body.Target)
+	target, err := forward.CheckTarget(body.Target)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -141,23 +165,26 @@ func (h *Handler) replayRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := forward.Send(r.Context(), h.Client, req, target, forward.SendOptions{Replay: true})
+	res := forward.Send(r.Context(), h.Client, req, target, forward.SendOptions{Replay: true, KeepPath: h.KeepPath})
 
 	errMsg := ""
 	if res.Err != nil {
 		errMsg = res.Err.Error()
 	}
-	if err := h.Store.SetForwardResult(r.Context(), id, res.Status, res.Duration.Milliseconds(), errMsg); err != nil {
+	recordErr := ""
+	if err := h.Store.SetReplayResult(r.Context(), id, res.Status, res.Duration.Milliseconds(), errMsg); err != nil {
 		h.logf("could not record the replay of #%d: %v", id, err)
+		recordErr = "replay sent, but its result was not saved"
 	}
 
-	h.logf("↻ #%d replayed → %s %dms", id, replayLabel(res.Status, errMsg), res.Duration.Milliseconds())
+	h.logf("↻ #%d replayed → %s %dms", id, render.ForwardLabel(res.Status, errMsg), res.Duration.Milliseconds())
 
 	writeJSON(w, map[string]any{
-		"status": res.Status,
-		"ms":     res.Duration.Milliseconds(),
-		"error":  errMsg,
-		"body":   string(res.Body),
+		"status":       res.Status,
+		"ms":           res.Duration.Milliseconds(),
+		"error":        errMsg,
+		"body":         string(res.Body),
+		"record_error": recordErr,
 	})
 }
 
@@ -171,13 +198,24 @@ func (h *Handler) deleteRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	selectors := 0
+	for _, set := range []bool{body.All, body.OlderThanMs != 0, len(body.IDs) > 0} {
+		if set {
+			selectors++
+		}
+	}
+	if selectors > 1 {
+		http.Error(w, "pass only one of ids, older_than_ms, or all", http.StatusBadRequest)
+		return
+	}
+
 	var deleted int64
 	var err error
 	switch {
 	case body.All:
-		deleted, err = h.Store.DeleteAll(r.Context())
+		deleted, err = h.Store.DeleteMatching(r.Context(), store.DeleteFilter{})
 	case body.OlderThanMs > 0:
-		deleted, err = h.Store.DeleteOlderThan(r.Context(), body.OlderThanMs)
+		deleted, err = h.Store.DeleteMatching(r.Context(), store.DeleteFilter{ToMs: body.OlderThanMs})
 	case len(body.IDs) > 0:
 		deleted, err = h.Store.DeleteByIDs(r.Context(), body.IDs)
 	default:
@@ -200,8 +238,8 @@ func (h *Handler) logf(format string, args ...any) {
 	}
 }
 
-// fail keeps store errors off the page except as a short message, since the
-// page shows whatever comes back in a toast.
+// fail keeps store errors off the page, since they can name the database path
+// and the page shows whatever comes back in a toast. The detail goes to the log.
 func (h *Handler) fail(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "request not found", http.StatusNotFound)
@@ -209,7 +247,7 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 	}
 
 	h.logf("dashboard: %v", err)
-	http.Error(w, err.Error(), http.StatusInternalServerError)
+	http.Error(w, "storage error, see the hooktape log", http.StatusInternalServerError)
 }
 
 func requestID(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -222,23 +260,12 @@ func requestID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// checkTarget validates the replay target typed into the page: it is a URL
-// this process will fetch, so it has to be an http(s) address and nothing else.
-func checkTarget(target string) (string, error) {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return "", errors.New("no target: set a replay target first")
-	}
-
-	u, err := url.Parse(target)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return "", errors.New("invalid target: use http://host:port")
-	}
-
-	return target, nil
-}
-
 func readJSON(w http.ResponseWriter, r *http.Request, dest any) bool {
+	if media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || media != "application/json" {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(dest); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return false
@@ -250,12 +277,4 @@ func readJSON(w http.ResponseWriter, r *http.Request, dest any) bool {
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(value)
-}
-
-func replayLabel(status int, errMsg string) string {
-	if errMsg != "" {
-		return errMsg
-	}
-
-	return strconv.Itoa(status)
 }

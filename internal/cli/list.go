@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/mainak58/hooktape/internal/model"
 	"github.com/mainak58/hooktape/internal/render"
 	"github.com/mainak58/hooktape/internal/store"
@@ -43,7 +44,9 @@ func init() {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
-	s, err := store.Open(dbPath)
+	cmd.SilenceUsage = true
+
+	s, err := openExisting()
 	if err != nil {
 		return err
 	}
@@ -56,7 +59,6 @@ func runList(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cmd.SilenceUsage = true
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -104,9 +106,14 @@ func printList(ctx context.Context, cmd *cobra.Command, s *store.Store) error {
 	table := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(table, "ID\tTIME\tENDPOINT\tMETHOD\tPATH\tSIZE\tAPP")
 	for _, r := range requests {
+		app := appLabel(colors, &r)
+		if replayed(&r) {
+			app += " ↻" + resultLabel(colors, r.ReplayStatus, r.ReplayError)
+		}
+
 		fmt.Fprintf(table, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			r.ID, formatTime(r.CreatedAt, now), r.Endpoint, r.Method, r.Path,
-			render.HumanSize(r.BodySize), appLabel(colors, &r))
+			humanize.Bytes(uint64(r.BodySize)), app)
 	}
 
 	return table.Flush()
@@ -125,14 +132,20 @@ func formatTime(createdAt int64, now time.Time) string {
 }
 
 func appLabel(colors render.Palette, r *model.Request) string {
-	label := render.ForwardLabel(r.ForwardStatus, r.ForwardError)
+	return resultLabel(colors, r.ForwardStatus, r.ForwardError)
+}
+
+func resultLabel(colors render.Palette, status int, errMsg string) string {
+	label := render.ForwardLabel(status, errMsg)
 
 	switch {
 	case label == "-":
 		return colors.Dim(label)
-	case r.ForwardStatus >= 200 && r.ForwardStatus < 300:
+	case errMsg != "":
+		return colors.Red(label)
+	case status >= 200 && status < 300:
 		return colors.Green(label)
-	case r.ForwardStatus >= 300 && r.ForwardStatus < 400:
+	case status >= 300 && status < 400:
 		return colors.Yellow(label)
 	default:
 		return colors.Red(label)

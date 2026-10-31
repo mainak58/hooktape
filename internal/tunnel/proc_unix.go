@@ -3,6 +3,8 @@
 package tunnel
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -18,6 +20,11 @@ func terminate(cmd *exec.Cmd) error {
 }
 
 // kill signals the whole group, since cloudflared may have children of its own.
+// Once the child is reaped its pid can be reused, so that group is not ours.
 func kill(cmd *exec.Cmd) error {
+	if errors.Is(cmd.Process.Signal(syscall.Signal(0)), os.ErrProcessDone) {
+		return nil
+	}
+
 	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }

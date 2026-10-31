@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -82,7 +84,7 @@ func TestSendDeliversRequest(t *testing.T) {
 				Query:   "x=1&y=2",
 				Headers: tt.headers,
 				Body:    tt.body,
-			}, srv.URL, SendOptions{})
+			}, srv.URL, SendOptions{KeepPath: true})
 
 			if res.Err != nil || res.Status != http.StatusOK {
 				t.Fatalf("Result = %+v", res)
@@ -113,7 +115,7 @@ func TestSendDeliversRequest(t *testing.T) {
 func TestSendTrimsTargetSlashAndKeepsEscapedPath(t *testing.T) {
 	srv, got := newApp(t)
 
-	send(t, &model.Request{Method: "POST", Path: "/a%3Fb"}, srv.URL+"/", SendOptions{})
+	send(t, &model.Request{Method: "POST", Path: "/a%3Fb"}, srv.URL+"/", SendOptions{KeepPath: true})
 
 	if app := <-got; app.path != "/a%3Fb" || app.query != "" {
 		t.Errorf("app got path %q, query %q", app.path, app.query)
@@ -141,7 +143,7 @@ func TestSendDropsHeaders(t *testing.T) {
 	for _, name := range []string{
 		"Host", "Keep-Alive", "Proxy-Connection", "Te", "Trailer", "Upgrade",
 		"Proxy-Authorization", "Proxy-Authenticate", "Cf-Connecting-Ip", "Cf-Ray",
-		"cf-lowercase",
+		"cf-lowercase", "Expect",
 	} {
 		headers[name] = []string{"dropped"}
 	}
@@ -210,7 +212,7 @@ func TestSendDoesNotFollowRedirects(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	res := send(t, &model.Request{Method: "POST", Path: "/from"}, srv.URL, SendOptions{})
+	res := send(t, &model.Request{Method: "POST", Path: "/from"}, srv.URL, SendOptions{KeepPath: true})
 
 	if res.Err != nil || res.Status != http.StatusFound {
 		t.Errorf("Result = %+v, want 302", res)
@@ -284,5 +286,175 @@ func TestSendBadTarget(t *testing.T) {
 
 	if res.Err == nil || res.Status != 0 {
 		t.Errorf("Result = %+v, want an error and status 0", res)
+	}
+}
+
+func TestSendIgnoresCallerPathByDefault(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    string
+		path      string
+		query     string
+		wantPath  string
+		wantQuery string
+	}{
+		{"root", "", "/admin/users/1", "force=true", "/", "force=true"},
+		{"base path", "/webhooks/stripe", "/admin", "", "/webhooks/stripe", ""},
+		{"target with a query", "/hook?key=1", "/admin", "a=2", "/hook", "key=1&a=2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, got := newApp(t)
+
+			send(t, &model.Request{Method: "DELETE", Path: tt.path, Query: tt.query}, srv.URL+tt.target, SendOptions{})
+
+			if app := <-got; app.path != tt.wantPath || app.query != tt.wantQuery {
+				t.Errorf("app got %q?%q, want %q?%q", app.path, app.query, tt.wantPath, tt.wantQuery)
+			}
+		})
+	}
+}
+
+func TestSendRefusesDotDotPaths(t *testing.T) {
+	var reached bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	defer srv.Close()
+
+	for _, path := range []string{"/../x", "/a/../../x", "/%2e%2e/x", "/%2E%2e/x", "/.%2e/x", "/a/..%2Fx", "/..%5Cx"} {
+		res := send(t, &model.Request{Method: "POST", Path: path}, srv.URL+"/base", SendOptions{KeepPath: true})
+		if res.Err == nil {
+			t.Errorf("%s: no error", path)
+		}
+	}
+	if reached {
+		t.Error("a dot-segment path reached the app")
+	}
+
+	if res := send(t, &model.Request{Method: "POST", Path: "/a..b/c.d"}, srv.URL, SendOptions{KeepPath: true}); res.Err != nil {
+		t.Errorf("harmless dots refused: %v", res.Err)
+	}
+}
+
+func TestSendRefusesTruncatedBody(t *testing.T) {
+	srv, got := newApp(t)
+
+	res := send(t, &model.Request{Method: "POST", Path: "/", Body: []byte("cut"), Truncated: true}, srv.URL, SendOptions{})
+
+	if !errors.Is(res.Err, ErrTruncated) || res.Status != 0 {
+		t.Errorf("Result = %+v, want ErrTruncated", res)
+	}
+	select {
+	case app := <-got:
+		t.Errorf("app got %+v", app)
+	default:
+	}
+}
+
+func TestSendCredentialsOnReplay(t *testing.T) {
+	secrets := map[string][]string{"Authorization": {"Bearer x"}, "Cookie": {"s=1"}, "Stripe-Signature": {"v1=a"}}
+
+	// The test server is on loopback, so a non-local target has to reach it
+	// through a client that ignores the URL's host.
+	remote := func(srv *httptest.Server) *http.Client {
+		client := NewClient(5 * time.Second)
+		client.Transport = &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+		}}
+		return client
+	}
+
+	tests := []struct {
+		name     string
+		remote   bool
+		opts     SendOptions
+		wantAuth bool
+	}{
+		{"local replay keeps them", false, SendOptions{Replay: true}, true},
+		{"remote replay drops them", true, SendOptions{Replay: true}, false},
+		{"remote replay with the opt-in", true, SendOptions{Replay: true, KeepCredentials: true}, true},
+		{"live forward keeps them", true, SendOptions{}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, got := newApp(t)
+
+			client, target := NewClient(5*time.Second), srv.URL
+			if tt.remote {
+				client, target = remote(srv), "http://example.com"
+			}
+			Send(context.Background(), client, &model.Request{Method: "POST", Path: "/", Headers: secrets}, target, tt.opts)
+
+			app := <-got
+			if has := app.header.Get("Authorization") != "" && app.header.Get("Cookie") != ""; has != tt.wantAuth {
+				t.Errorf("credentials present = %v, want %v", has, tt.wantAuth)
+			}
+			if app.header.Get("Stripe-Signature") == "" {
+				t.Error("signature header was dropped")
+			}
+		})
+	}
+}
+
+func TestLocalClientRefusesPublicAddresses(t *testing.T) {
+	r := &model.Request{Method: "POST", Path: "/"}
+	client := NewLocalClient(2 * time.Second)
+
+	srv, got := newApp(t)
+	if res := Send(context.Background(), client, r, srv.URL, SendOptions{}); res.Err != nil || res.Status != http.StatusOK {
+		t.Fatalf("loopback: %+v", res)
+	}
+	<-got
+
+	for _, target := range []string{"http://169.254.169.254", "http://8.8.8.8", "http://[2001:4860:4860::8888]", "http://0.0.0.0:1"} {
+		res := Send(context.Background(), client, r, target, SendOptions{})
+		if res.Err == nil || !strings.Contains(res.Err.Error(), "refusing to connect") {
+			t.Errorf("%s: err = %v, want a refusal", target, res.Err)
+		}
+	}
+}
+
+func TestLocalClientIgnoresProxyEnv(t *testing.T) {
+	transport := NewLocalClient(time.Second).Transport.(*http.Transport)
+	if transport.Proxy != nil {
+		t.Error("Proxy is set, so the dial check would only see the proxy")
+	}
+}
+
+func TestIsLocalTarget(t *testing.T) {
+	tests := []struct {
+		target string
+		want   bool
+	}{
+		{"http://localhost:3000", true},
+		{"http://LOCALHOST", true},
+		{"http://127.0.0.1:3000/x", true},
+		{"http://[::1]:3000", true},
+		{"http://10.0.0.5", true},
+		{"http://192.168.1.2:80", true},
+		{"http://169.254.169.254", false},
+		{"http://8.8.8.8", false},
+		{"https://example.com", false},
+		{"http://localhost.evil.example", false},
+		{"http://bad host", false},
+	}
+
+	for _, tt := range tests {
+		if got := IsLocalTarget(tt.target); got != tt.want {
+			t.Errorf("IsLocalTarget(%q) = %v, want %v", tt.target, got, tt.want)
+		}
+	}
+}
+
+func TestCheckTarget(t *testing.T) {
+	if got, err := CheckTarget("  http://localhost:3000 "); err != nil || got != "http://localhost:3000" {
+		t.Errorf("got %q, %v", got, err)
+	}
+
+	for _, target := range []string{"", "   ", "localhost:3000", "file:///etc/passwd", "gopher://x", "http://"} {
+		if _, err := CheckTarget(target); err == nil {
+			t.Errorf("CheckTarget(%q) passed", target)
+		}
 	}
 }

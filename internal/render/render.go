@@ -32,7 +32,7 @@ func Colors(enabled bool) Palette {
 	}
 }
 
-func PrettyBody(body []byte, contentType string) string {
+func PrettyBody(body []byte) string {
 	if len(body) == 0 {
 		return "<empty body>"
 	}
@@ -44,34 +44,23 @@ func PrettyBody(body []byte, contentType string) string {
 		}
 	}
 
-	if utf8.Valid(body) {
+	if utf8.Valid(body) && !bytes.ContainsFunc(body, isControl) {
 		return string(body)
 	}
 
 	return fmt.Sprintf("<%d bytes binary, first 32 bytes hex: %s>", len(body), hex.EncodeToString(body[:min(len(body), 32)]))
 }
 
-func HumanSize(n int) string {
-	const unit = 1024
-
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-
-	size := float64(n) / unit
-	if size < 1023.95 {
-		return fmt.Sprintf("%.1f KB", size)
-	}
-
-	return fmt.Sprintf("%.1f MB", size/unit)
+func isControl(r rune) bool {
+	return r < 0x20 && r != '\t' && r != '\r' && r != '\n'
 }
 
 func ForwardLabel(status int, errMsg string) string {
-	if status != 0 {
-		return strconv.Itoa(status)
-	}
 	if errMsg == "" {
-		return "-"
+		if status == 0 {
+			return "-"
+		}
+		return strconv.Itoa(status)
 	}
 
 	msg := strings.ToLower(errMsg)

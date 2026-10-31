@@ -1,11 +1,12 @@
 package catcher
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -23,47 +24,52 @@ type Forwarder interface {
 type Handler struct {
 	Store     *store.Store
 	Forwarder Forwarder // may be nil (capture-only)
-	MaxBody   int64     // bytes; default 1<<20
+	MaxBody   int64     // bytes; default 1MB (SI, as --max-body parses it)
 	Respond   int       // status to return to provider; default 200
 	Logf      func(format string, args ...any)
 }
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/h/{endpoint}", h.capture)
-	mux.HandleFunc("/h/{endpoint}/{rest...}", h.capture)
 	mux.HandleFunc("GET /_health", h.health)
 	mux.HandleFunc("/", h.notFound)
-	return mux
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rest, ok := strings.CutPrefix(r.URL.EscapedPath(), "/h/"); ok && rest != "" {
+			h.capture(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 	maxBody := h.MaxBody
 	if maxBody <= 0 {
-		maxBody = 1 << 20
+		maxBody = 1_000_000
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
+	body, readErr := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+	if readErr != nil && len(body) == 0 {
 		http.Error(w, "could not read body", http.StatusBadRequest)
 		return
+	}
+
+
+	truncated := readErr != nil || int64(len(body)) > maxBody
+	if int64(len(body)) > maxBody {
+		body = body[:maxBody]
 	}
 
 	headers := r.Header.Clone()
 	headers.Set("Host", r.Host)
 
-	endpoint := r.PathValue("endpoint")
+	endpoint, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), "/h/"), "/")
+	endpoint, _ = url.PathUnescape(endpoint)
 	if !validEndpoint.MatchString(endpoint) {
 		http.Error(w, "invalid endpoint name", http.StatusBadRequest)
 		return
 	}
-
-	_, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), "/h/"), "/")
 
 	req := &model.Request{
 		Endpoint:  endpoint,
@@ -74,9 +80,13 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		Body:      body,
 		RemoteIP:  clientIP(r),
 		CreatedAt: time.Now().UnixMilli(),
+		Truncated: truncated,
 	}
 
-	id, err := h.Store.Insert(r.Context(), req)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 25*time.Second)
+	defer cancel()
+
+	id, err := h.Store.Insert(ctx, req)
 	if err != nil {
 		h.logf("insert failed: %v", err)
 		http.Error(w, "could not store request", http.StatusInternalServerError)
@@ -87,9 +97,23 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusOK
 	}
+	reply := fmt.Sprintf(`{"ok":true,"id":%d}`, id)
+
+	// 413 even with --respond: a 200 would tell the provider nothing was lost,
+	// and this way it can retry once --max-body is raised.
+	if truncated {
+		status = http.StatusRequestEntityTooLarge
+		reply = fmt.Sprintf(`{"ok":false,"id":%d,"truncated":true}`, id)
+		h.logf("#%d is over --max-body, stored the first %d B and answered 413", id, maxBody)
+	}
+	if readErr != nil {
+		status = http.StatusBadRequest
+		h.logf("#%d was cut off (%v), stored the %d B that arrived", id, readErr, len(body))
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	fmt.Fprintf(w, `{"ok":true,"id":%d}`, id)
+	fmt.Fprint(w, reply)
 
 	if h.Forwarder != nil {
 		forwarded := *req
@@ -120,7 +144,7 @@ func clientIP(r *http.Request) string {
 	}
 
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		if forwarded := r.Header.Get("CF-Connecting-IP"); forwarded != "" {
+		if forwarded := r.Header.Get("CF-Connecting-IP"); net.ParseIP(forwarded) != nil {
 			return forwarded
 		}
 	}

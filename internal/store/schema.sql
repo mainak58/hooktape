@@ -5,7 +5,7 @@ CREATE TABLE
     method TEXT NOT NULL,
     path TEXT NOT NULL,
     query TEXT NOT NULL DEFAULT '',
-    headers TEXT NOT NULL, -- JSON object map[string][]string
+    headers TEXT NOT NULL, -- JSON object; see headers_b64, added in store.go
     body BLOB NOT NULL,
     remote_ip TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,

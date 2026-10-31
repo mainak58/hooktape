@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"slices"
 	"strconv"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/mainak58/hooktape/internal/model"
 	"github.com/mainak58/hooktape/internal/render"
 	"github.com/mainak58/hooktape/internal/store"
@@ -48,7 +48,7 @@ func runShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid id %q", args[0])
 	}
 
-	s, err := store.Open(dbPath)
+	s, err := openExisting()
 	if err != nil {
 		return err
 	}
@@ -61,7 +61,7 @@ func runShow(cmd *cobra.Command, args []string) error {
 
 	out := cmd.OutOrStdout()
 	colors := paletteFor(cmd)
-	body := render.PrettyBody(r.Body, http.Header(r.Headers).Get("Content-Type"))
+	body := render.PrettyBody(r.Body)
 
 	switch {
 	case showRaw:
@@ -80,12 +80,20 @@ func runShow(cmd *cobra.Command, args []string) error {
 		target += "?" + r.Query
 	}
 
+	size := humanize.Bytes(uint64(r.BodySize))
+	if r.Truncated {
+		size += " truncated at --max-body"
+	}
+
 	fmt.Fprintf(out, "%s  %s\n", colors.Bold(r.Method+" "+target), colors.Dim(fmt.Sprintf("(#%d, endpoint %s, %s, %s)",
-		r.ID, r.Endpoint, render.HumanSize(r.BodySize), formatTime(r.CreatedAt, time.Now()))))
+		r.ID, r.Endpoint, size, formatTime(r.CreatedAt, time.Now()))))
 	printHeaders(out, colors, r.Headers)
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, body)
-	fmt.Fprintln(out, forwardLine(colors, r))
+	fmt.Fprintln(out, resultLine(colors, "app", r.ForwardStatus, r.ForwardMs, r.ForwardError))
+	if replayed(r) {
+		fmt.Fprintln(out, resultLine(colors, "replay", r.ReplayStatus, r.ReplayMs, r.ReplayError))
+	}
 
 	return nil
 }
@@ -112,15 +120,19 @@ func printHeaders(out io.Writer, colors render.Palette, headers map[string][]str
 	}
 }
 
-func forwardLine(colors render.Palette, r *model.Request) string {
-	label := appLabel(colors, r)
+func replayed(r *model.Request) bool {
+	return r.ReplayStatus != 0 || r.ReplayError != ""
+}
+
+func resultLine(colors render.Palette, name string, status int, ms int64, errMsg string) string {
+	label := resultLabel(colors, status, errMsg)
 
 	switch {
-	case r.ForwardStatus != 0:
-		return fmt.Sprintf("app: %s in %dms", label, r.ForwardMs)
-	case r.ForwardError != "":
-		return fmt.Sprintf("app: %s (%s)", label, r.ForwardError)
+	case errMsg != "":
+		return fmt.Sprintf("%s: %s (%s)", name, label, errMsg)
+	case status != 0:
+		return fmt.Sprintf("%s: %s in %dms", name, label, ms)
 	default:
-		return "app: " + label
+		return name + ": " + label
 	}
 }

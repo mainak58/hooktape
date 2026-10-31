@@ -220,6 +220,7 @@ dl.kv dt{color:var(--muted)} dl.kv dd{margin:0;font-family:var(--mono);font-size
 .fwd{display:flex;gap:12px;align-items:center;padding:10px 12px;border-radius:var(--radius);border:1px solid var(--border);margin-bottom:14px;font-size:13px;flex-wrap:wrap}
 .fwd.ok{background:var(--ok-soft);border-color:transparent}
 .fwd.bad{background:var(--err-soft);border-color:transparent}
+.st.rp{margin-left:8px;font-size:11px} .st.rp::before{display:none}
 .fwd .msg{flex:1;min-width:0;font-family:var(--mono);font-size:12px;word-break:break-all}
 .replay-row{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
 .replay-row input{flex:1;min-width:180px;font-family:var(--mono);font-size:12.5px}
@@ -518,7 +519,7 @@ dialog::backdrop{background:rgba(0,0,0,.35)}
      GET  /api/status                       -> {version, db, catcher, public, forward, endpoint_hint, started_at}
      GET  /api/requests?limit=N             -> [Request without body, with body_size]
      GET  /api/requests/{id}                -> Request (body as base64, Go's []byte default)
-     POST /api/requests/{id}/replay {target}-> {status, ms, error, body}
+     POST /api/requests/{id}/replay {target}-> {status, ms, error, body, record_error}
      POST /api/requests/delete {ids:[...]}  -> {deleted}
      POST /api/requests/delete {older_than_ms} -> {deleted}
      POST /api/requests/delete {all:true}   -> {deleted}
@@ -548,10 +549,12 @@ const state = {
 
 /* ---------------- helpers ---------------- */
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* SI like humanize.Bytes on the CLI and --max-body */
 function humanSize(n) {
-  if (n < 1024) return n + " B";
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
-  return (n / 1048576).toFixed(1) + " MB";
+  if (n < 1e3) return n + " B";
+  if (n < 1e6) return (n / 1e3).toFixed(1) + " kB";
+  if (n < 1e9) return (n / 1e6).toFixed(1) + " MB";
+  return (n / 1e9).toFixed(1) + " GB";
 }
 const pad = n => String(n).padStart(2, "0");
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -567,22 +570,23 @@ function ago(ms) {
   if (s < 86400) return Math.floor(s / 3600) + "h ago"; return Math.floor(s / 86400) + "d ago";
 }
 /* mirrors render.ForwardLabel */
-function fwdLabel(r) {
-  const e = (r.forward_error || "").toLowerCase();
-  if (r.forward_status) return String(r.forward_status);
-  if (!e) return "-";
+function resultLabel(status, error) {
+  const e = (error || "").toLowerCase();
+  if (!e) return status ? String(status) : "-";
   if (e.includes("refused")) return "refused";
-  if (e.includes("timeout") || e.includes("deadline")) return "timeout";
+  if (e.includes("timeout") || e.includes("deadline exceeded")) return "timeout";
   return "error";
 }
-function fwdClass(r) {
-  const l = fwdLabel(r);
+function labelClass(l) {
   if (l === "-") return "none";
   const n = +l;
   if (n >= 200 && n < 300) return "ok";
   if (n >= 300 && n < 400) return "redir";
   return "bad";
 }
+const fwdLabel = r => resultLabel(r.forward_status, r.forward_error);
+const fwdClass = r => labelClass(fwdLabel(r));
+const replayLabel = r => resultLabel(r.replay_status, r.replay_error);
 const isFail = r => fwdClass(r) === "bad";
 function isLocalIP(ip) {
   return /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fe80:|fc|fd|localhost)/i.test(ip || "");
@@ -831,8 +835,8 @@ function renderRequests(rows) {
       <td><span class="m m-${m}">${esc(r.method)}</span></td>
       <td class="path" title="${esc(r.path + (r.query ? "?" + r.query : ""))}">${esc(r.path)}${r.query ? `<span class="q">?${esc(r.query)}</span>` : ""}</td>
       <td class="mono"><button class="linkish" data-ip="${esc(r.remote_ip)}" title="Show only this IP">${esc(r.remote_ip || "—")}</button></td>
-      <td class="num mono">${humanSize(r.body_size || 0)}</td>
-      <td><span class="st ${fc}" title="${esc(r.forward_error || "")}">${esc(fl)}</span></td>
+      <td class="num mono">${humanSize(r.body_size || 0)}${r.truncated ? ` <span class="badge fail" title="Over --max-body when caught: cut off, and will not be forwarded or replayed">truncated</span>` : ""}</td>
+      <td><span class="st ${fc}" title="${esc(r.forward_error || "")}">${esc(fl)}</span>${replayLabel(r) !== "-" ? `<span class="st rp ${labelClass(replayLabel(r))}" title="Latest replay${r.replay_error ? ": " + esc(r.replay_error) : ""}">↻${esc(replayLabel(r))}</span>` : ""}</td>
       <td class="num mono hide-sm faint">${r.forward_ms ? r.forward_ms + " ms" : ""}</td>
     </tr>`;
   }).join("");
@@ -950,8 +954,7 @@ function renderEndpoints() {
 function renderServerKv() {
   const s = state.status;
   const rows = [["Version", s.version], ["Database", s.db], ["Catcher", s.catcher], ["Public URL", s.public || "none (local only)"],
-    ["Forward", s.forward || "capture only"], ["Started", s.started_at ? fmtFull(s.started_at) + " (" + ago(s.started_at) + ")" : "—"],
-    ["Retention", s.retention || "keep forever"]];
+    ["Forward", s.forward || "capture only"], ["Started", s.started_at ? fmtFull(s.started_at) + " (" + ago(s.started_at) + ")" : "—"]];
   $("#serverKv").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v || "—")}</dd>`).join("");
 }
 
@@ -1040,6 +1043,7 @@ function paintDetail(r, bytes) {
   const ct = headerGet(r.headers, "content-type");
   const fc = fwdClass(r), fl = fwdLabel(r);
   const fwdMsg = fl === "-" ? "Not forwarded yet." : fc === "ok" ? `App answered ${fl}` : r.forward_error || `App answered ${fl}`;
+  const rl = replayLabel(r), rc = labelClass(rl);
   const headers = Object.entries(r.headers || {}).sort((a, b) => a[0].localeCompare(b[0]));
   const hq = state.headerQ.toLowerCase();
   const hl = s => hq ? esc(s).replace(new RegExp(hq.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), x => `<span class="mark">${x}</span>`) : esc(s);
@@ -1066,6 +1070,15 @@ function paintDetail(r, bytes) {
       <span class="msg">${esc(fwdMsg)}</span>
       ${r.forward_ms ? `<span class="mono">${r.forward_ms} ms</span>` : ""}
     </div>
+    ${rl === "-" ? "" : `<div class="fwd ${rc === "ok" ? "ok" : rc === "bad" ? "bad" : ""}">
+      <span class="st ${rc}">↻ ${esc(rl)}</span>
+      <span class="msg">${esc(r.replay_error || `Latest replay answered ${rl}`)}</span>
+      ${r.replay_ms ? `<span class="mono">${r.replay_ms} ms</span>` : ""}
+    </div>`}
+    ${r.truncated ? `<div class="fwd bad">
+      <span class="st bad">truncated</span>
+      <span class="msg">Over --max-body when caught. Only the first ${humanSize(r.body_size || 0)} was kept, so this request is not forwarded or replayed.</span>
+    </div>` : ""}
     <div class="meta">
       <div><div class="k">Remote IP</div><div class="v"><button class="linkish" data-ip="${esc(r.remote_ip)}">${esc(r.remote_ip || "—")}</button></div></div>
       <div><div class="k">Content-Type</div><div class="v" title="${esc(ct)}">${esc(ct || "—")}</div></div>
@@ -1099,12 +1112,13 @@ async function replay(ids) {
   for (const id of ids) {
     try {
       const res = await api(`/requests/${id}/replay`, { method: "POST", body: { target } });
-      const good = res.status >= 200 && res.status < 300;
+      const good = !res.error && !res.record_error && res.status >= 200 && res.status < 300;
       good ? ok++ : bad++;
+      const result = { replay_status: res.status || 0, replay_error: res.error || "", replay_ms: res.ms || 0 };
       const r = state.byId.get(id);
-      if (r) { r.forward_status = res.status || 0; r.forward_error = res.error || ""; r.forward_ms = res.ms || 0; r._hay = null; }
-      const d = state.detail.get(id); if (d) Object.assign(d, { forward_status: res.status || 0, forward_error: res.error || "", forward_ms: res.ms || 0 });
-      if (ids.length === 1) toast(good ? `#${id} replayed → ${res.status} in ${res.ms} ms` : `#${id} replay → ${res.status || res.error}`, good ? "ok" : "err");
+      if (r) Object.assign(r, result);
+      const d = state.detail.get(id); if (d) Object.assign(d, result);
+      if (ids.length === 1) toast(good ? `#${id} replayed → ${res.status} in ${res.ms} ms` : `#${id} replay → ${res.error || res.record_error || res.status}`, good ? "ok" : "err");
     } catch (e) { bad++; if (ids.length === 1) toast(`#${id} replay failed: ${e.message}`, "err"); }
   }
   if (ids.length > 1) toast(`Replayed ${ids.length}: ${ok} ok, ${bad} failed`, bad ? "err" : "ok");
@@ -1377,7 +1391,7 @@ const Demo = (() => {
       await new Promise(r => setTimeout(r, 60));
       const method = opts.method || "GET", body = opts.body || {};
       if (path === "/status") return { version: "v0.1.0 (demo)", db: "./hooktape.db", catcher: "http://127.0.0.1:8080", public: "https://brave-otter.trycloudflare.com",
-        forward: "http://localhost:3000", endpoint_hint: "stripe-dev", started_at: Date.now() - 2 * 3600000 - 1234, retention: "7d" };
+        forward: "http://localhost:3000", endpoint_hint: "stripe-dev", started_at: Date.now() - 2 * 3600000 - 1234 };
       if (path.startsWith("/requests?")) return rows.slice().reverse().map(pub);
       if (path === "/requests/delete" && method === "POST") {
         const before = rows.length;
@@ -1391,8 +1405,8 @@ const Demo = (() => {
         const r = rows.find(x => x.id === +m[1]); if (!r) throw new Error(`no request with id ${m[1]}`);
         await new Promise(res => setTimeout(res, 150));
         const ok = Math.random() < .8;
-        Object.assign(r, ok ? { forward_status: 200, forward_error: "", forward_ms: 8 + Math.floor(Math.random() * 40) } : { forward_status: 500, forward_error: "", forward_ms: 41 });
-        return { status: r.forward_status, ms: r.forward_ms, error: r.forward_error };
+        Object.assign(r, ok ? { replay_status: 200, replay_error: "", replay_ms: 8 + Math.floor(Math.random() * 40) } : { replay_status: 500, replay_error: "", replay_ms: 41 });
+        return { status: r.replay_status, ms: r.replay_ms, error: r.replay_error };
       }
       m = path.match(/^\/requests\/(\d+)$/);
       if (m) { const r = rows.find(x => x.id === +m[1]); if (!r) throw new Error(`no request with id ${m[1]}`); return { ...pub(r), body: bytesToB64(r._bytes) }; }

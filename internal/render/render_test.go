@@ -40,6 +40,9 @@ func TestPrettyBody(t *testing.T) {
 		{"empty", nil, "<empty body>"},
 		{"json", []byte(`{"a":1}`), "{\n  \"a\": 1\n}"},
 		{"text", []byte("hello=world"), "hello=world"},
+		{"tabs and newlines stay text", []byte("a\tb\r\nc"), "a\tb\r\nc"},
+		{"control bytes go to hex", []byte("A\x00\x00B"), "<4 bytes binary, first 32 bytes hex: 41000042>"},
+		{"escape sequences go to hex", []byte("\x1b[2J"), "<4 bytes binary, first 32 bytes hex: 1b5b324a>"},
 		{"binary", []byte{0xff, 0x00, 0xfe, 'a'}, "<4 bytes binary, first 32 bytes hex: ff00fe61>"},
 		{
 			"long binary shows only 32 bytes",
@@ -50,31 +53,10 @@ func TestPrettyBody(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := PrettyBody(tt.body, ""); got != tt.want {
+			if got := PrettyBody(tt.body); got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestHumanSize(t *testing.T) {
-	tests := []struct {
-		n    int
-		want string
-	}{
-		{0, "0 B"},
-		{512, "512 B"},
-		{1023, "1023 B"},
-		{1024, "1.0 KB"},
-		{2150, "2.1 KB"},
-		{1048575, "1.0 MB"},
-		{1468006, "1.4 MB"},
-	}
-
-	for _, tt := range tests {
-		if got := HumanSize(tt.n); got != tt.want {
-			t.Errorf("HumanSize(%d) = %q, want %q", tt.n, got, tt.want)
-		}
 	}
 }
 
@@ -91,6 +73,7 @@ func TestForwardLabel(t *testing.T) {
 		{0, `Post "http://localhost:3000": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`, "timeout"},
 		{0, "dial tcp: i/o timeout", "timeout"},
 		{0, "something else went wrong", "error"},
+		{200, "unexpected EOF", "error"},
 	}
 
 	for _, tt := range tests {

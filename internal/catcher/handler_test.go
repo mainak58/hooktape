@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -152,18 +153,113 @@ func TestInvalidEndpoint(t *testing.T) {
 }
 
 func TestBodyOverMaxBody(t *testing.T) {
-	srv, s := newTestServer(t, &Handler{MaxBody: 10})
+	forwarder := make(fakeForwarder, 1)
+	srv, s := newTestServer(t, &Handler{MaxBody: 10, Respond: http.StatusAccepted, Forwarder: forwarder})
+	body := []byte("0123456789overflow")
 
-	status, _ := send(t, "POST", srv.URL+"/h/demo", make([]byte, 11), nil)
-	if status != http.StatusRequestEntityTooLarge {
-		t.Errorf("status %d, want 413", status)
+	status, reply := send(t, "POST", srv.URL+"/h/demo", body, nil)
+	if status != http.StatusRequestEntityTooLarge || reply != `{"ok":false,"id":1,"truncated":true}` {
+		t.Errorf("got %d %q", status, reply)
+	}
+
+	got, err := s.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.Truncated || string(got.Body) != "0123456789" {
+		t.Errorf("stored truncated=%v body=%q", got.Truncated, got.Body)
+	}
+	if forwarded := <-forwarder; !forwarded.Truncated {
+		t.Error("Forward did not get the truncated flag")
+	}
+
+	status, _ = send(t, "POST", srv.URL+"/h/demo", make([]byte, 10), nil)
+	if status != http.StatusAccepted {
+		t.Errorf("body at the limit: status %d, want 202", status)
+	}
+	<-forwarder
+
+	atLimit, err := s.Get(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if atLimit.Truncated {
+		t.Error("body at the limit was marked truncated")
+	}
+}
+
+func TestDefaultMaxBodyMatchesFlagUnits(t *testing.T) {
+	srv, _ := newTestServer(t, &Handler{})
+
+	if status, _ := send(t, "POST", srv.URL+"/h/demo", make([]byte, 1_000_000), nil); status != http.StatusOK {
+		t.Errorf("1000000 B: status %d, want 200", status)
+	}
+	if status, _ := send(t, "POST", srv.URL+"/h/demo", make([]byte, 1_000_001), nil); status != http.StatusRequestEntityTooLarge {
+		t.Errorf("1000001 B: status %d, want 413", status)
+	}
+}
+
+func TestClientHangupStillStores(t *testing.T) {
+	h := &Handler{}
+	newTestServer(t, h)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest("POST", "/h/demo", strings.NewReader("hello")).WithContext(ctx)
+	h.Routes().ServeHTTP(httptest.NewRecorder(), r)
+
+	if n := storedCount(t, h.Store); n != 1 {
+		t.Errorf("stored %d rows, want 1", n)
+	}
+}
+
+func TestDotSegmentsAreCaptured(t *testing.T) {
+	forwarder := make(fakeForwarder, 3)
+	srv, s := newTestServer(t, &Handler{Forwarder: forwarder})
+
+	for i, path := range []string{"/x/../y", "/../../etc", "/%2e%2e/y"} {
+		if status, _ := send(t, "POST", srv.URL+"/h/demo"+path, nil, nil); status != http.StatusOK {
+			t.Fatalf("%s: status %d", path, status)
+		}
+		got, err := s.Get(context.Background(), int64(i+1))
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Path != path || got.Endpoint != "demo" {
+			t.Errorf("stored %q on %q, want %q on demo", got.Path, got.Endpoint, path)
+		}
+	}
+}
+
+func TestEndpointStillValidated(t *testing.T) {
+	srv, s := newTestServer(t, &Handler{})
+
+	for _, url := range []string{"/h/../x", "/h/%2e%2e/x", "/h//x", "/h/a%2Fb/x"} {
+		if status, _ := send(t, "POST", srv.URL+url, nil, nil); status != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", url, status)
+		}
+	}
+	for _, url := range []string{"/h", "/h/"} {
+		if status, _ := send(t, "POST", srv.URL+url, nil, nil); status != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404", url, status)
+		}
 	}
 	if n := storedCount(t, s); n != 0 {
 		t.Errorf("stored %d rows, want 0", n)
 	}
+}
 
-	if status, _ := send(t, "POST", srv.URL+"/h/demo", make([]byte, 10), nil); status != http.StatusOK {
-		t.Errorf("body at the limit: status %d, want 200", status)
+func TestEscapedEndpointStillRoutes(t *testing.T) {
+	srv, s := newTestServer(t, &Handler{})
+
+	send(t, "POST", srv.URL+"/h/de%6Do/x", nil, nil)
+
+	got, err := s.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Endpoint != "demo" {
+		t.Errorf("Endpoint = %q, want demo", got.Endpoint)
 	}
 }
 
@@ -198,6 +294,16 @@ func TestClientIPIgnoresHeaderFromRemotePeer(t *testing.T) {
 
 	if got := clientIP(r); got != "198.51.100.7" {
 		t.Errorf("clientIP = %q, want 198.51.100.7", got)
+	}
+}
+
+func TestClientIPIgnoresHeaderThatIsNotAnIP(t *testing.T) {
+	r := httptest.NewRequest("POST", "/h/demo", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
+	r.Header.Set("CF-Connecting-IP", "1.2.3.4; DROP TABLE requests;--")
+
+	if got := clientIP(r); got != "127.0.0.1" {
+		t.Errorf("clientIP = %q, want 127.0.0.1", got)
 	}
 }
 
@@ -267,5 +373,26 @@ func TestLogsOneLine(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("nothing logged")
+	}
+}
+
+func TestCutOffBodyKeepsWhatArrived(t *testing.T) {
+	srv, s := newTestServer(t, &Handler{})
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprint(conn, "POST /h/stripe HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\nhello")
+	conn.(*net.TCPConn).CloseWrite()
+	io.Copy(io.Discard, conn)
+	conn.Close()
+
+	rows, err := s.List(context.Background(), store.ListOptions{WithBody: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || string(rows[0].Body) != "hello" || !rows[0].Truncated {
+		t.Fatalf("rows = %+v, want one truncated row holding hello", rows)
 	}
 }

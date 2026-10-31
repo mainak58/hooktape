@@ -32,7 +32,7 @@ go.work.sum
 # .idea/
 # .vscode/
 
-doc
+/doc/
 
 # hooktape binary and data. The leading / keeps this from matching cmd/hooktape.
 /hooktape

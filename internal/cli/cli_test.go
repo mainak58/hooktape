@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -30,17 +34,21 @@ func run(t *testing.T, args ...string) (string, error) {
 		f.Changed = false
 	}
 	rootCmd.PersistentFlags().VisitAll(reset)
-	for _, c := range []*cobra.Command{listCmd, showCmd, replayCmd, upCmd} {
+	for _, c := range []*cobra.Command{listCmd, showCmd, replayCmd, upCmd, deleteCmd} {
 		c.Flags().VisitAll(reset)
 	}
 
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
 	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetIn(strings.NewReader(stdin))
 	rootCmd.SetArgs(args)
 	err := rootCmd.Execute()
 	return out.String(), err
 }
+
+// stdin is what the next run reads; only the delete prompt reads anything.
+var stdin string
 
 // seed stores three requests and returns the db path: #1 forwarded with a 200,
 // #2 with a 500, #3 refused.
@@ -124,6 +132,11 @@ func TestListOutput(t *testing.T) {
 
 func TestListEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	s.Close()
 
 	out, err := run(t, "list", "--db", path)
 	if err != nil {
@@ -139,6 +152,27 @@ func TestListEmpty(t *testing.T) {
 	}
 	if strings.TrimSpace(out) != "[]" {
 		t.Errorf("--json on an empty db = %q, want []", out)
+	}
+}
+
+func TestReadCommandsNeedADatabase(t *testing.T) {
+	replayEnv(t)
+	path := filepath.Join(t.TempDir(), "typo", "nope.db")
+
+	for _, args := range [][]string{
+		{"list", "--db", path},
+		{"show", "1", "--db", path},
+		{"replay", "1", "--db", path, "--forward", "http://127.0.0.1:9"},
+		{"delete", "--all", "--db", path},
+	} {
+		_, err := run(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "no database at "+path) {
+			t.Errorf("%s: err = %v", args[0], err)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a read command created the directory: %v", err)
 	}
 }
 
@@ -281,7 +315,7 @@ func app(t *testing.T, status int, ids *[]string) *httptest.Server {
 	return server
 }
 
-func forwardStatus(t *testing.T, dbFile string, id int64) (int, string) {
+func stored(t *testing.T, dbFile string, id int64) *model.Request {
 	t.Helper()
 
 	s, err := store.Open(dbFile)
@@ -295,7 +329,7 @@ func forwardStatus(t *testing.T, dbFile string, id int64) (int, string) {
 		t.Fatalf("Get %d: %v", id, err)
 	}
 
-	return r.ForwardStatus, r.ForwardError
+	return r
 }
 
 func TestReplaySendsIdsInOrder(t *testing.T) {
@@ -323,9 +357,190 @@ func TestReplaySendsIdsInOrder(t *testing.T) {
 		}
 	}
 
-	// #3 was a refused forward when it was seeded.
-	if status, errMsg := forwardStatus(t, path, 3); status != 200 || errMsg != "" {
-		t.Errorf("stored result for #3 = (%d, %q), want (200, \"\")", status, errMsg)
+	// #3 was a refused forward when it was seeded. That record survives; the
+	// replay goes next to it.
+	r := stored(t, path, 3)
+	if r.ReplayStatus != 200 || r.ReplayError != "" {
+		t.Errorf("replay of #3 = (%d, %q), want (200, \"\")", r.ReplayStatus, r.ReplayError)
+	}
+	if r.ForwardStatus != 0 || r.ForwardError == "" {
+		t.Errorf("live result of #3 changed to (%d, %q)", r.ForwardStatus, r.ForwardError)
+	}
+}
+
+func TestFailedReplayKeepsLiveResult(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	if _, err := run(t, "replay", "1", "--db", path, "--forward", "http://127.0.0.1:9"); err == nil {
+		t.Fatal("unreachable app: want an error")
+	}
+
+	out, err := run(t, "show", "1", "--db", path)
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if !strings.Contains(out, "app: 200 in 38ms\n") {
+		t.Errorf("live delivery lost:\n%s", out)
+	}
+	if !strings.Contains(out, "replay: refused (") {
+		t.Errorf("replay failure not shown:\n%s", out)
+	}
+
+	out, err = run(t, "list", "--db", path)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(out, "200 ↻refused") {
+		t.Errorf("list does not show both:\n%s", out)
+	}
+}
+
+func TestReplayForwardPath(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+	}))
+	defer server.Close()
+
+	if out, err := run(t, "replay", "1", "--db", path, "--forward", server.URL+"/base"); err != nil {
+		t.Fatalf("replay: %v\n%s", err, out)
+	}
+	if out, err := run(t, "replay", "1", "--db", path, "--forward", server.URL+"/base", "--forward-path"); err != nil {
+		t.Fatalf("replay --forward-path: %v\n%s", err, out)
+	}
+	if got := strings.Join(paths, " "); got != "/base /base/hook" {
+		t.Errorf("app saw %q", got)
+	}
+}
+
+// truncatedApp sends a 2xx status line and then drops the connection mid-body.
+func truncatedApp(t *testing.T) string {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nab"))
+	}))
+	t.Cleanup(server.Close)
+
+	return server.URL
+}
+
+// mixedApp answers 500 for one id and 200 for the rest.
+func mixedApp(t *testing.T, badID string) string {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Hooktape-Id") == badID {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	return server.URL
+}
+
+func TestReplayExitCode(t *testing.T) {
+	refused := func() string {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close()
+		return "http://" + listener.Addr().String()
+	}
+
+	tests := []struct {
+		name     string
+		ids      []string
+		target   string
+		wantFail bool
+		want     []string
+	}{
+		{"all 2xx", []string{"1", "2"}, mixedApp(t, ""), false, []string{"✓ #1", "✓ #2"}},
+		{"mixture", []string{"1", "2", "3"}, mixedApp(t, "2"), true, []string{"✓ #1", "✗ #2 replayed → 500", "✓ #3"}},
+		{"send failure", []string{"1"}, refused(), true, []string{"✗ #1 replay failed"}},
+		{"2xx with a body read error", []string{"1"}, truncatedApp(t), true, []string{"✗ #1 replay failed: unexpected EOF"}},
+		{"missing id mid-list", []string{"1", "999", "3"}, mixedApp(t, ""), true, []string{"✓ #1", "✗ no request with id 999", "✓ #3"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			replayEnv(t)
+			args := append([]string{"replay", "--db", seed(t), "--forward", tt.target}, tt.ids...)
+
+			out, err := run(t, args...)
+			if (err != nil) != tt.wantFail {
+				t.Errorf("err = %v, wantFail %v\n%s", err, tt.wantFail, out)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("missing %q in:\n%s", want, out)
+				}
+			}
+		})
+	}
+}
+
+func TestReplayBodyErrorIsShown(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	if _, err := run(t, "replay", "1", "--db", path, "--forward", truncatedApp(t)); err == nil {
+		t.Fatal("want an error")
+	}
+
+	out, err := run(t, "show", "1", "--db", path)
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if !strings.Contains(out, "replay: error (unexpected EOF)") {
+		t.Errorf("error hidden behind the status:\n%s", out)
+	}
+}
+
+func TestReplayBadTargetIsNotRemembered(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	if _, err := run(t, "replay", "1", "--db", path, "--forward", "localhost:3000"); err == nil {
+		t.Error("scheme-less target: want an error")
+	}
+	if _, err := run(t, "replay", "1", "--db", path, "--forward", "http://127.0.0.1:9"); err == nil {
+		t.Error("refused target: want an error")
+	}
+
+	c, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if c.LastForward != "" {
+		t.Errorf("remembered %q before it ever worked", c.LastForward)
+	}
+}
+
+func TestReplayDropsCredentialsOffThisMachine(t *testing.T) {
+	replayEnv(t)
+	path := seed(t)
+
+	// The host cannot resolve, but the note is printed before the send.
+	out, _ := run(t, "replay", "1", "--db", path, "--forward", "http://hooktape.invalid", "--timeout", "1s")
+	if !strings.Contains(out, "Authorization and Cookie are dropped") {
+		t.Errorf("no note:\n%s", out)
+	}
+
+	out, _ = run(t, "replay", "1", "--db", path, "--forward", "http://hooktape.invalid", "--timeout", "1s", "--keep-credentials")
+	if strings.Contains(out, "are dropped") {
+		t.Errorf("note despite --keep-credentials:\n%s", out)
 	}
 }
 
@@ -375,8 +590,8 @@ func TestReplayNonOKFails(t *testing.T) {
 	if !strings.HasPrefix(out, "✗ #1 replayed → 500 ") {
 		t.Errorf("got %q", out)
 	}
-	if status, _ := forwardStatus(t, path, 1); status != 500 {
-		t.Errorf("stored status = %d, want 500", status)
+	if r := stored(t, path, 1); r.ReplayStatus != 500 {
+		t.Errorf("stored replay status = %d, want 500", r.ReplayStatus)
 	}
 }
 
@@ -396,8 +611,8 @@ func TestReplayUnreachableApp(t *testing.T) {
 	if !strings.HasPrefix(out, "✗ #1 replay failed: ") {
 		t.Errorf("got %q", out)
 	}
-	if status, errMsg := forwardStatus(t, path, 1); status != 0 || errMsg == "" {
-		t.Errorf("stored result = (%d, %q), want (0, non-empty)", status, errMsg)
+	if r := stored(t, path, 1); r.ReplayStatus != 0 || r.ReplayError == "" {
+		t.Errorf("stored replay = (%d, %q), want (0, non-empty)", r.ReplayStatus, r.ReplayError)
 	}
 }
 
@@ -472,6 +687,7 @@ func TestAppLabelColours(t *testing.T) {
 		{404, "", "31"},
 		{500, "", "31"},
 		{0, "connection refused", "31"},
+		{200, "unexpected EOF", "31"},
 		{0, "", "2"},
 	}
 
