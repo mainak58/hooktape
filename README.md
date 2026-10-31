@@ -35,6 +35,13 @@ go install github.com/mainak58/hooktape/cmd/hooktape@latest
 Go 1.26 or newer (see `go.mod`). The build is pure Go (no cgo, no system
 libraries).
 
+If `hooktape` isn't found after installing, add Go's bin directory to your
+`PATH`:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
 Or from a clone:
 
 ```sh
