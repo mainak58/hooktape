@@ -28,12 +28,60 @@ hooktape list/show/replay ─┴─▶ read ./hooktape.db
 
 ## Install
 
+### Docker
+
+No Go needed. The image runs on `linux/amd64` and `linux/arm64`:
+
+```sh
+docker run -d --name hooktape \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 \
+  -v hooktape-data:/data \
+  --add-host=host.docker.internal:host-gateway \
+  mainak58/hooktape --forward http://host.docker.internal:3000/webhooks
+```
+
+Send requests to `http://localhost:8080/h/<endpoint>` and open the dashboard at
+<http://localhost:8081>. To run the other commands:
+
+```sh
+docker exec hooktape hooktape list
+docker exec hooktape hooktape replay 1
+```
+
+If your app runs in Compose, forward to its service name instead:
+
+```yaml
+services:
+  hooktape:
+    image: mainak58/hooktape:v0.1.0
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - hooktape-data:/data
+    command: ["--forward", "http://app:3000/webhooks"]
+    restart: unless-stopped
+
+  app:
+    build: .
+
+volumes:
+  hooktape-data:
+```
+
+Keep `127.0.0.1` in the dashboard's port mapping: the dashboard has no login. The
+startup log warns that anyone on the network can reach it because the container
+listens on every interface; the port mapping is what limits that. The image has
+no cloudflared, so it has no public URL of its own.
+
+### Go
+
 ```sh
 go install github.com/mainak58/hooktape/cmd/hooktape@latest
 ```
 
 Go 1.26 or newer (see `go.mod`). The build is pure Go (no cgo, no system
-libraries).
+libraries). The first install compiles SQLite, so it can take a few minutes.
 
 If `hooktape` isn't found after installing, add Go's bin directory to your
 `PATH`:

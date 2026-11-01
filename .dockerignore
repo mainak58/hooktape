@@ -1,0 +1,6 @@
+# Allow list, so hooktape.db and its captured requests never reach the build.
+*
+!cmd
+!internal
+!go.mod
+!go.sum
