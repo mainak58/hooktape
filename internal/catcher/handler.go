@@ -55,7 +55,6 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	truncated := readErr != nil || int64(len(body)) > maxBody
 	if int64(len(body)) > maxBody {
 		body = body[:maxBody]

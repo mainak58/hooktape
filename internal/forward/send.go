@@ -64,7 +64,14 @@ func Send(ctx context.Context, client *http.Client, r *model.Request, target str
 		if escapesBase(r.Path) {
 			return Result{Err: fmt.Errorf("path %q climbs above the target, so it was not sent", r.Path)}
 		}
-		dest = strings.TrimRight(target, "/") + r.Path
+		// "/" is a bare /h/<endpoint>, so there is no path to add.
+		if r.Path != "/" {
+			base, query, hasQuery := strings.Cut(target, "?")
+			dest = strings.TrimRight(base, "/") + r.Path
+			if hasQuery {
+				dest += "?" + query
+			}
+		}
 	}
 	if r.Query != "" {
 		if strings.Contains(dest, "?") {

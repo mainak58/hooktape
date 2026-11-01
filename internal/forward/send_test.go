@@ -122,6 +122,26 @@ func TestSendTrimsTargetSlashAndKeepsEscapedPath(t *testing.T) {
 	}
 }
 
+func TestSendKeepPathWithTargetQuery(t *testing.T) {
+	srv, got := newApp(t)
+
+	send(t, &model.Request{Method: "POST", Path: "/charges", Query: "x=1"}, srv.URL+"/webhooks?key=abc", SendOptions{KeepPath: true})
+
+	if app := <-got; app.path != "/webhooks/charges" || app.query != "key=abc&x=1" {
+		t.Errorf("app got path %q, query %q", app.path, app.query)
+	}
+}
+
+func TestSendKeepPathBareEndpointKeepsTarget(t *testing.T) {
+	srv, got := newApp(t)
+
+	send(t, &model.Request{Method: "POST", Path: "/"}, srv.URL+"/webhooks", SendOptions{KeepPath: true})
+
+	if app := <-got; app.path != "/webhooks" {
+		t.Errorf("app got path %q", app.path)
+	}
+}
+
 func TestSendKeepsRepeatedHeaders(t *testing.T) {
 	srv, got := newApp(t)
 

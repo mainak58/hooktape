@@ -1027,11 +1027,12 @@ function curlFor(r, bytes) {
   const url = `${base}/h/${r.endpoint}${r.path === "/" ? "" : r.path}${r.query ? "?" + r.query : ""}`;
   const sq = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
   const skip = /^(host|content-length|connection|accept-encoding|cf-|cdn-loop|x-forwarded-)/i;
-  const parts = [`curl -X ${r.method} ${sq(url)}`];
+  const method = /^[A-Za-z]+$/.test(r.method) ? r.method : sq(r.method); // anyone holding the URL picks the method
+  const parts = [`curl -X ${method} ${sq(url)}`];
   for (const [k, vs] of Object.entries(r.headers || {})) if (!skip.test(k)) for (const v of vs) parts.push(`-H ${sq(k + ": " + v)}`);
   if (bytes && bytes.length) {
     const t = utf8(bytes);
-    parts.push(t != null ? `--data-binary ${sq(t)}` : `--data-binary @body.bin`);
+    parts.push(t != null ? `--data-raw ${sq(t)}` : `--data-binary @body.bin`);
   }
   return parts.join(" \\\n  ");
 }

@@ -5,7 +5,7 @@ Catch, store, and replay webhooks on your own machine.
 A single Go binary. It needs no account and no hosted database. A provider like
 Stripe or GitHub posts to a public URL, hooktape writes the request to a local
 SQLite file, answers `200` straight away, and forwards it to your app.
-When your handler has a bug, you fix the code and replay the same request, byte
+When your handler has a bug, you fix the code and replay the same payload, byte
 for byte, instead of clicking "pay" in a test dashboard again.
 
 ![The hooktape dashboard, showing captured webhooks from Stripe, GitHub and Shopify with the status each one got from the local app](docs/dashboard.png)
@@ -37,8 +37,13 @@ docker run -d --name hooktape \
   -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 \
   -v hooktape-data:/data \
   --add-host=host.docker.internal:host-gateway \
+  -e HOOKTAPE_FORWARD=http://host.docker.internal:3000/webhooks \
   mainak58/hooktape --forward http://host.docker.internal:3000/webhooks
 ```
+
+`--forward` tells `up` where to send each new request, and `HOOKTAPE_FORWARD`
+tells `docker exec` replays where to send it, because the flag doesn't reach
+`exec` and the remembered target is lost when the container is recreated.
 
 Send requests to `http://localhost:8080/h/<endpoint>` and open the dashboard at
 <http://localhost:8081>. To run the other commands:
@@ -46,7 +51,11 @@ Send requests to `http://localhost:8080/h/<endpoint>` and open the dashboard at
 ```sh
 docker exec hooktape hooktape list
 docker exec hooktape hooktape replay 1
+docker exec hooktape hooktape delete --all --yes
 ```
+
+`delete` needs `--yes` here. Plain `docker exec` has no interactive stdin to
+answer its prompt, so without it you get `Error: nothing deleted`.
 
 If your app runs in Compose, forward to its service name instead:
 
@@ -59,6 +68,8 @@ services:
       - "127.0.0.1:8081:8081"
     volumes:
       - hooktape-data:/data
+    environment:
+      HOOKTAPE_FORWARD: http://app:3000/webhooks
     command: ["--forward", "http://app:3000/webhooks"]
     restart: unless-stopped
 
@@ -68,6 +79,17 @@ services:
 volumes:
   hooktape-data:
 ```
+
+Both targets above are hostnames, so `replay` and dashboard replays drop
+`Authorization` and `Cookie` (see [What gets forwarded](#what-gets-forwarded)).
+Add `--keep-credentials` to `replay`, or point the dashboard's replay target at
+the IP address. Automatic forwards keep them.
+
+A replay right after `docker compose up -d` can fail with `connection refused`
+while your app is still starting. Run it again once the app is up.
+
+Inside the container, `localhost` means the container itself, so `--forward` needs
+`host.docker.internal` or a service name to reach your app.
 
 Keep `127.0.0.1` in the dashboard's port mapping: the dashboard has no login. The
 startup log warns that anyone on the network can reach it because the container
@@ -122,7 +144,7 @@ the same host.
 2. Paste the `paste →` URL into the provider's dashboard as the webhook endpoint.
    Any name after `/h/` works (letters, digits, `-` and `_`, up to 64
    characters), so give each provider its own: `/h/stripe`, `/h/github-dev`.
-   Anything else gets a `400`.
+   Any other name gets a `400`, and an empty one gets a `404`.
 
 3. Trigger an event. Each event prints two lines, one for the incoming request
    and one for your app's response:
@@ -174,7 +196,10 @@ while the tab is visible.
 
 Replay from the page goes to the target set in Storage & settings, which is saved
 in this browser. Until you set one it starts at the `--forward` URL, or
-`http://localhost:3000` if there is none, so check it before you click.
+`http://localhost:3000` if there is none, so check it before you click. The page
+has no `--keep-credentials` and doesn't warn when a replay drops `Authorization`
+and `Cookie` (see [What gets forwarded](#what-gets-forwarded)). To keep them, use
+`localhost` or a loopback or private IP address as the target.
 
 Search takes plain words and filters: `method:post`, `status:5xx`,
 `status:failed`, `ip:54.187.*`, `ep:stripe`, `id:42`, `path:/charges`,
@@ -244,7 +269,7 @@ hooktape replay 12
 hooktape replay 3 4 5 --forward http://localhost:3000
 hooktape replay 12 --timeout 30s
 hooktape replay 12 --forward-path        # append the stored path to the target
-hooktape replay 12 --keep-credentials    # keep Authorization and Cookie on a public host
+hooktape replay 12 --keep-credentials    # keep Authorization and Cookie on a non-local target
 ```
 
 `replay` takes its target from `--forward`, then `$HOOKTAPE_FORWARD`, then the
@@ -295,8 +320,11 @@ Run it with no selector and it refuses. Ids cannot be mixed with filters, `--all
 stands alone, and `--older-than` cannot be mixed with `--from` or `--to`.
 
 It shows the count and asks `[y/N]` first. `--yes` / `-y` skips the question,
-which a script needs because anything other than yes aborts with exit 1.
-`--dry-run` prints the count and deletes nothing.
+which a script or a plain `docker exec` needs because anything other than yes
+aborts with exit 1. `--dry-run` prints the count and deletes nothing.
+
+Requests that arrive after a delete starts are kept, unless a `--to` reaches past
+that moment.
 
 After deleting, `delete` compacts the file, so the disk space comes back and the
 deleted secrets are gone from it. If that step fails, or another process is
@@ -346,9 +374,15 @@ The stored request is replayed as faithfully as a proxy can:
   `Cf-*`. Signature headers are kept untouched, so your verification code runs
   for real.
 - Plus `X-Hooktape-Id: <id>`, and `X-Hooktape-Replay: true` on replays, so your
-  app can tell a replay apart if it wants to.
-- A replay to anything other than `localhost` or a loopback or private IP drops
-  `Authorization` and `Cookie`, unless you pass `--keep-credentials`.
+  app can tell a replay apart if it wants to. Go's HTTP client also adds
+  `Accept-Encoding: gzip`, and a `User-Agent` if the sender didn't set one.
+- A CLI or dashboard replay drops `Authorization` and `Cookie` unless the target
+  is `localhost` or a loopback or private IP address. This is a text check with
+  no DNS lookup, so a hostname such as `host.docker.internal` or a Compose service
+  name counts as non-local even when it resolves to a private address.
+  `hooktape replay --keep-credentials` sends them. The dashboard has no such
+  option, so point its replay target at the IP address. Automatic forwards always
+  keep them, and signature headers and `X-Api-Key` are not dropped.
 
 Point `--forward` at one handler, or opt in to path pass-through if your app
 routes on the path:
@@ -374,8 +408,10 @@ your app is down, the request is already saved: fix the app and `replay`.
 - Nothing is caught while your laptop is asleep or offline, because hooktape
   runs locally. A provider's retries may cover the gap, but check its docs.
 - Late replays can fail signature checks. Many providers sign a timestamp and
-  reject anything older than a few minutes. The replay is byte-identical, so a
-  rejection means your signature check works.
+  reject anything older than a few minutes. The replay sends the same body and
+  signature headers, so a rejection means your signature check works.
+- A replay to a non-local target can fail auth because `Authorization` and
+  `Cookie` were dropped. See [What gets forwarded](#what-gets-forwarded).
 - A body over `--max-body` is cut to that size and stored with a truncated flag,
   and the provider gets `413` whatever `--respond` says. A truncated row is never
   forwarded or replayed, since your app would only see half a payload. Raise the
@@ -406,7 +442,9 @@ your app is down, the request is already saved: fix the app and `replay`.
 - Requests are stored as they arrived, so `hooktape.db` holds real signatures,
   tokens, and customer data in a plain file with no encryption. The file is
   readable only by your user on Linux and macOS, and `*.db` is gitignored here, but treat it as a
-  secret and clear it with `hooktape delete --all` when you are done.
+  secret and clear it with `hooktape delete --all` when you are done (add `--yes`
+  under `docker exec`). Requests that arrive after it starts are kept, so run it
+  once traffic has stopped.
 - Anything that can reach the catcher port can write to your database and trigger
   a forward, so avoid `--addr 0.0.0.0` on a shared network. The dashboard has no
   login, so a non-loopback `--ui-addr` lets anyone who can reach it read, delete,

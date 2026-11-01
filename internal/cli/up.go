@@ -158,9 +158,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 		Handler:           handler.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    int(min(max(maxBody, minHeaderBytes), http.DefaultMaxHeaderBytes)),
+		// Outlasts the read timeout plus the 25s insert, or a stalled body
+		// would lose its 400 to the same deadline.
+		WriteTimeout:   60 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: int(min(max(maxBody, minHeaderBytes), http.DefaultMaxHeaderBytes)),
 	}
 
 	var ui *web.Handler
